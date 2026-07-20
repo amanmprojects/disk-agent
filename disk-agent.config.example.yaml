@@ -1,0 +1,59 @@
+# Example project-local overrides (optional).
+# Primary config lives at ~/.disk-agent/config.yaml after `disk-agent setup`.
+
+agentName: Disk
+
+# Directory used by coding tools (read/bash/edit/write)
+# cwd: /path/to/your/project
+
+model:
+  # SuperGrok / X subscription via pi-supergrok (shares ~/.pi/agent/auth.json)
+  provider: supergrok
+  id: grok-4.5
+  # Alternatives:
+  # id: grok-4.3
+  # id: grok-composer-2.5-fast
+  # id: grok-4.20-0309-reasoning
+  # provider: xai
+  # id: grok-4
+  thinking: medium
+
+telegram:
+  enabled: true
+  # botToken: set via TELEGRAM_BOT_TOKEN env instead
+  dmPolicy: pairing # pairing | allowlist | owner_only | open
+  allowFrom: []
+  # ownerId: "123456789"
+  groupsRequireMention: true
+  streamEdits: true
+  maxMessageChars: 3900
+
+cron:
+  enabled: true
+  heartbeat:
+    enabled: true
+    everyMinutes: 30
+    quietHours:
+      start: 23
+      end: 8
+
+browser:
+  enabled: true
+  headless: true
+  timeoutMs: 60000
+  # allowedDomains: ["example.com"]
+
+memory:
+  enabled: true
+  maxFacts: 200
+  injectUserMd: true
+  injectSoulMd: true
+  injectMemoryMd: true
+  injectDailyLog: true
+  dailyLogDays: 2
+
+security:
+  bashGuard: true
+
+logging:
+  level: info

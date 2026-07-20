@@ -1,0 +1,17 @@
+# disk-agent local config (optional — ~/.disk-agent/config.yaml is primary)
+agentName: Disk
+telegram:
+  enabled: false
+  dmPolicy: pairing
+cron:
+  enabled: true
+  heartbeat:
+    enabled: true
+    everyMinutes: 30
+browser:
+  enabled: true
+  headless: true
+memory:
+  enabled: true
+logging:
+  level: info

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "ai-sdk": {
+      "source": "vercel/ai",
+      "sourceType": "github",
+      "skillPath": "skills/use-ai-sdk/SKILL.md",
+      "computedHash": "0883204d11b055e968dee697c5858e68064c27dfd4deb6310212895daa65c5ad"
+    },
+    "pi-coding-agent": {
+      "source": "mizchi/skills",
+      "sourceType": "github",
+      "skillPath": "node/pi-coding-agent/SKILL.md",
+      "computedHash": "ad82c369df02f7306edeec2f1773fee7c48f97ee40842abae05ca7aca38838cc"
+    }
+  }
+}

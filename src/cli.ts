@@ -1,0 +1,357 @@
+#!/usr/bin/env node
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
+import { Command } from "commander";
+import chalk from "chalk";
+import {
+  bootstrapHome,
+  loadConfig,
+  saveConfig,
+  initProjectConfig,
+  type AppConfig,
+} from "./config.js";
+import { Gateway } from "./gateway.js";
+import { describeSchedule } from "./cron/scheduler.js";
+import { nowIso } from "./utils.js";
+import type { IncomingMessage } from "./types.js";
+
+const program = new Command();
+
+program
+  .name("disk-agent")
+  .description("OpenClaw/Hermes-style personal AI agent gateway (Pi-powered)")
+  .version("0.1.0");
+
+program
+  .command("setup")
+  .description("Initialize ~/.disk-agent workspace, config, and identity files")
+  .option("--name <name>", "Agent name", "Disk")
+  .option("--data-dir <path>", "Override data directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .option("--telegram-token <token>", "Set Telegram bot token")
+  .option("--owner <id>", "Telegram owner user id")
+  .option("--model <provider/id>", "Default model, e.g. supergrok/grok-4.5")
+  .action((opts) => {
+    const cfg = bootstrapHome({
+      dataDir: opts.dataDir,
+      workspaceDir: opts.workspace,
+      agentName: opts.name,
+    });
+    if (opts.telegramToken) {
+      cfg.telegram.botToken = opts.telegramToken;
+      cfg.telegram.enabled = true;
+    }
+    if (opts.owner) cfg.telegram.ownerId = String(opts.owner);
+    if (opts.model) {
+      const raw = String(opts.model);
+      if (raw.includes("/")) {
+        const [provider, ...rest] = raw.split("/");
+        if (provider && rest.length) {
+          cfg.model.provider = provider;
+          cfg.model.id = rest.join("/");
+        }
+      } else {
+        cfg.model.id = raw;
+      }
+    }
+    if (opts.name) cfg.agentName = opts.name;
+    saveConfig(cfg);
+    initProjectConfig(process.cwd());
+    console.log(chalk.green("✓ Disk Agent initialized"));
+    console.log(`  data:      ${cfg.dataDir}`);
+    console.log(`  workspace: ${cfg.workspaceDir}`);
+    console.log(`  config:    ${cfg.dataDir}/config.yaml`);
+    console.log(`  model:     ${cfg.model.provider}/${cfg.model.id}`);
+    console.log(`  env:       ${cfg.dataDir}/.env.example → copy to .env`);
+    console.log("");
+    console.log("Auth (pick one):");
+    console.log("  • SuperGrok / X Premium:  pi → /login supergrok   (shares ~/.pi/agent/auth.json)");
+    console.log("  • xAI API key:            export XAI_API_KEY=...");
+    console.log("  • Other providers:        ANTHROPIC_API_KEY / OPENAI_API_KEY");
+    console.log("");
+    console.log("Next:");
+    console.log("  1. disk-agent models          # verify SuperGrok is visible");
+    console.log("  2. Create a Telegram bot via @BotFather and set TELEGRAM_BOT_TOKEN");
+    console.log("  3. disk-agent gateway");
+    console.log("  4. DM the bot, then: disk-agent pair <CODE>");
+  });
+
+program
+  .command("gateway")
+  .description("Start the long-running gateway (Telegram + cron + agent)")
+  .option("--data-dir <path>", "Override data directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .option("--cwd <path>", "Coding tools working directory")
+  .action(async (opts) => {
+    const cfg = loadCfg(opts);
+    if (opts.cwd) cfg.cwd = opts.cwd;
+    const gw = new Gateway(cfg);
+    const shutdown = async (sig: string) => {
+      console.log(chalk.yellow(`\n${sig} received, shutting down…`));
+      await gw.stop();
+      process.exit(0);
+    };
+    process.on("SIGINT", () => void shutdown("SIGINT"));
+    process.on("SIGTERM", () => void shutdown("SIGTERM"));
+    await gw.start();
+    console.log(chalk.green(`${cfg.agentName} gateway running. Ctrl+C to stop.`));
+    // Keep alive
+    await new Promise(() => {
+      /* never resolves */
+    });
+  });
+
+program
+  .command("chat")
+  .description("Interactive CLI chat with the agent (no Telegram required)")
+  .option("--data-dir <path>", "Override data directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .option("--cwd <path>", "Coding tools working directory")
+  .action(async (opts) => {
+    const cfg = loadCfg(opts);
+    if (opts.cwd) cfg.cwd = opts.cwd;
+    // Don't start telegram polling in CLI chat
+    cfg.telegram.enabled = false;
+    const gw = new Gateway(cfg);
+    // Start cron only
+    gw.cron.setRunner((job) =>
+      gw.runCronJob(job).catch((e: unknown) => console.error(e)),
+    );
+    gw.cron.start();
+
+    console.log(chalk.cyan(`${cfg.agentName} CLI chat. /exit to quit, /new to reset.`));
+    const rl = createInterface({ input, output });
+    try {
+      while (true) {
+        const line = (await rl.question(chalk.bold("you> "))).trim();
+        if (!line) continue;
+        if (line === "/exit" || line === "/quit") break;
+        const msg: IncomingMessage = {
+          id: `cli_${Date.now()}`,
+          channel: "cli",
+          peerId: "local",
+          senderName: "user",
+          text: line,
+          timestamp: nowIso(),
+          chatId: "local",
+        };
+        process.stdout.write(chalk.dim("…thinking\n"));
+        const reply = await gw.handleIncoming(msg);
+        console.log(chalk.green(`${cfg.agentName}> `) + (reply || "(suppressed)"));
+      }
+    } finally {
+      rl.close();
+      await gw.stop();
+    }
+  });
+
+program
+  .command("pair")
+  .description("Approve a Telegram pairing code")
+  .argument("<code>", "Pairing code from the bot")
+  .option("--data-dir <path>", "Override data directory")
+  .action(async (code, opts) => {
+    const cfg = loadCfg(opts);
+    cfg.telegram.enabled = false; // no need to poll
+    const gw = new Gateway(cfg);
+    const msg = await gw.pair(String(code));
+    console.log(msg);
+  });
+
+program
+  .command("cron")
+  .description("Manage cron jobs")
+  .option("--data-dir <path>", "Override data directory")
+  .argument("[action]", "list | add | remove | run", "list")
+  .argument("[args...]", "action arguments")
+  .action(async (action: string, args: string[], opts) => {
+    const cfg = loadCfg(opts);
+    cfg.telegram.enabled = false;
+    const gw = new Gateway(cfg);
+    const act = (action || "list").toLowerCase();
+
+    if (act === "list") {
+      const jobs = gw.cron.list();
+      if (!jobs.length) {
+        console.log("No jobs.");
+        return;
+      }
+      for (const j of jobs) {
+        console.log(
+          `${j.id}  ${j.enabled ? "ON " : "OFF"}  ${j.name}  ${describeSchedule(j.schedule)}  runs=${j.runCount}`,
+        );
+      }
+      return;
+    }
+
+    if (act === "add") {
+      // disk-agent cron add "name" "schedule" "prompt..."
+      const [name, schedule, ...promptParts] = args;
+      if (!name || !schedule || !promptParts.length) {
+        console.error('Usage: disk-agent cron add <name> <schedule> <prompt>');
+        process.exit(1);
+      }
+      const owner = cfg.telegram.ownerId;
+      const job = gw.cron.add({
+        name,
+        schedule,
+        prompt: promptParts.join(" "),
+        deliver: {
+          channel: owner ? "telegram" : "cli",
+          peerId: owner ? owner : "local",
+          chatId: owner,
+        },
+      });
+      // arm without full start
+      gw.cron.start();
+      console.log(`Created ${job.id}`);
+      await sleep(200);
+      gw.cron.stop();
+      return;
+    }
+
+    if (act === "remove") {
+      const id = args[0];
+      if (!id) {
+        console.error("Usage: disk-agent cron remove <id>");
+        process.exit(1);
+      }
+      console.log(gw.cron.remove(id) ? "Removed" : "Not found");
+      return;
+    }
+
+    if (act === "run") {
+      const id = args[0];
+      if (!id) {
+        console.error("Usage: disk-agent cron run <id>");
+        process.exit(1);
+      }
+      gw.cron.setRunner((job) => gw.runCronJob(job));
+      await gw.cron.runNow(id);
+      console.log("Done");
+      return;
+    }
+
+    console.error(`Unknown action ${act}`);
+    process.exit(1);
+  });
+
+program
+  .command("memory")
+  .description("Inspect or write memory")
+  .option("--data-dir <path>", "Override data directory")
+  .argument("[action]", "list | search | save", "list")
+  .argument("[args...]", "query or fact text")
+  .action(async (action: string, args: string[], opts) => {
+    const cfg = loadCfg(opts);
+    const gw = new Gateway(cfg);
+    const act = (action || "list").toLowerCase();
+    if (act === "list") {
+      for (const f of gw.memory.listFacts().slice(0, 50)) {
+        console.log(`${f.id} [${f.kind}] ${f.content}`);
+      }
+      return;
+    }
+    if (act === "search") {
+      const q = args.join(" ");
+      for (const f of gw.memory.search(q)) {
+        console.log(`${f.id} [${f.kind}] ${f.content}`);
+      }
+      return;
+    }
+    if (act === "save") {
+      const content = args.join(" ");
+      if (!content) {
+        console.error("Usage: disk-agent memory save <fact>");
+        process.exit(1);
+      }
+      const e = gw.memory.saveFact({ content });
+      console.log(`Saved ${e.id}`);
+      return;
+    }
+    console.error(`Unknown action ${act}`);
+    process.exit(1);
+  });
+
+program
+  .command("sessions")
+  .description("List conversation sessions")
+  .option("--data-dir <path>", "Override data directory")
+  .action((opts) => {
+    const cfg = loadCfg(opts);
+    const gw = new Gateway(cfg);
+    for (const s of gw.sessions.list()) {
+      console.log(`${s.key}  msgs=${s.messageCount}  updated=${s.updatedAt}  id=${s.sessionId}`);
+    }
+  });
+
+program
+  .command("status")
+  .description("Show configuration and runtime status")
+  .option("--data-dir <path>", "Override data directory")
+  .action(async (opts) => {
+    const cfg = loadCfg(opts);
+    const gw = new Gateway(cfg);
+    console.log(chalk.bold(cfg.agentName));
+    console.log(`data:      ${cfg.dataDir}`);
+    console.log(`workspace: ${cfg.workspaceDir}`);
+    console.log(`cwd:       ${cfg.cwd}`);
+    console.log(`model:     ${cfg.model.provider}/${cfg.model.id}`);
+    console.log(`telegram:  ${cfg.telegram.enabled ? "enabled" : "disabled"} policy=${cfg.telegram.dmPolicy}`);
+    console.log(`owner:     ${cfg.telegram.ownerId ?? "(none)"}`);
+    console.log(`sessions:  ${gw.sessions.list().length}`);
+    console.log(`cron:      ${gw.cron.list().length} jobs`);
+    console.log(`memory:    ${gw.memory.listFacts().length} facts`);
+    try {
+      await gw.agent.ensureReady();
+      const models = await gw.agent.listModels();
+      const sg = models.filter((m) => m.provider === "supergrok");
+      const authOk = models.some((m) => m.auth);
+      console.log(
+        `supergrok: ${sg.length ? `${sg.length} models` : "not loaded"}` +
+          (sg.some((m) => m.auth) ? chalk.green(" (auth ok)") : chalk.yellow(" (login needed)")),
+      );
+      console.log(`auth any:  ${authOk ? chalk.green("yes") : chalk.yellow("no — run pi /login supergrok or set XAI_API_KEY")}`);
+    } catch (err) {
+      console.log(chalk.red(`pi/auth:   ${err instanceof Error ? err.message : String(err)}`));
+    }
+    const pending = gw.telegram.listPendingPairings();
+    if (pending.length) {
+      console.log(chalk.yellow(`pending pairings: ${pending.map((p) => p.code).join(", ")}`));
+    }
+  });
+
+program
+  .command("models")
+  .description("List SuperGrok / xAI / other models available to the agent")
+  .option("--data-dir <path>", "Override data directory")
+  .action(async (opts) => {
+    const cfg = loadCfg(opts);
+    const gw = new Gateway(cfg);
+    await gw.agent.ensureReady();
+    const models = await gw.agent.listModels();
+    if (!models.length) {
+      console.log("No models found. Install pi-supergrok and run: pi → /login supergrok");
+      process.exitCode = 1;
+      return;
+    }
+    for (const m of models) {
+      const flag = m.auth ? chalk.green("auth") : chalk.dim("no-auth");
+      console.log(`${m.provider}/${m.id}  [${flag}]`);
+    }
+    console.log("");
+    console.log(`Default: ${cfg.model.provider}/${cfg.model.id}`);
+    console.log("Override: DISK_AGENT_MODEL=supergrok/grok-4.5");
+  });
+
+program.parse();
+
+function loadCfg(opts: { dataDir?: string; workspace?: string }): AppConfig {
+  // Ensure home exists
+  bootstrapHome({ dataDir: opts.dataDir, workspaceDir: opts.workspace });
+  return loadConfig({ dataDir: opts.dataDir, workspaceDir: opts.workspace });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
