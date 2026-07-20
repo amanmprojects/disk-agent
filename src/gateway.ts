@@ -310,6 +310,7 @@ export class Gateway {
           `workspace: ${this.cfg.workspaceDir}`,
           `cwd: ${this.cfg.cwd}`,
           `model: ${this.cfg.model.provider}/${this.cfg.model.id}`,
+          `effort: ${this.cfg.model.thinking}`,
           `sessions: ${sessions}`,
           `cron jobs: ${jobs}`,
           `memory facts: ${facts}`,
@@ -317,6 +318,86 @@ export class Gateway {
           `telegram: ${this.telegram.isEnabled() ? "enabled" : "disabled"}`,
           `tools: ${ALL_AGENT_TOOL_NAMES.length}`,
         ].join("\n");
+      }
+
+      case "context":
+      case "ctx":
+      case "usage": {
+        try {
+          const u = await this.agent.getContextUsage(msg.channel, msg.peerId, {
+            chatId: msg.chatId,
+            senderName: msg.senderName,
+          });
+          const tok =
+            u.tokens == null ? "?" : u.tokens.toLocaleString("en-US");
+          const win =
+            u.contextWindow > 0 ? u.contextWindow.toLocaleString("en-US") : "?";
+          const pct =
+            u.percent == null ? "?" : `${u.percent.toFixed(1)}%`;
+          return [
+            `Context window — this chat`,
+            `${u.bar}  ${pct}`,
+            `tokens:  ${tok} / ${win}`,
+            `model:   ${u.model}`,
+            `session: ${u.sessionKey}  (≈${u.messageCount} turns tracked)`,
+            u.note ? `note:    ${u.note}` : undefined,
+            ``,
+            `Tip: /new resets the session and frees context.`,
+          ]
+            .filter((l) => l !== undefined)
+            .join("\n");
+        } catch (err) {
+          return `Could not read context: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+
+      case "effort":
+      case "thinking":
+      case "think_level": {
+        const levels = "off | minimal | low | medium | high | xhigh";
+        if (!arg) {
+          try {
+            const cur = await this.agent.getThinkingEffort(msg.channel, msg.peerId);
+            return [
+              `Thinking effort: **${cur.level}**`,
+              `model: ${cur.model}`,
+              `available: ${cur.available.join(", ") || levels}`,
+              ``,
+              `Usage: /effort <level>`,
+              `Examples: /effort low   /effort high   /effort off`,
+            ].join("\n");
+          } catch (err) {
+            return [
+              `Thinking effort (config): ${this.cfg.model.thinking}`,
+              `Usage: /effort <level>  (${levels})`,
+              `Error loading session: ${err instanceof Error ? err.message : String(err)}`,
+            ].join("\n");
+          }
+        }
+        try {
+          const result = await this.agent.setThinkingEffort(
+            msg.channel,
+            msg.peerId,
+            arg,
+            { chatId: msg.chatId, senderName: msg.senderName, persist: true },
+          );
+          saveConfig(this.cfg);
+          if (!result.applied) {
+            return [
+              `Requested effort **${arg}** → stored as **${result.level}**, but model may not support it.`,
+              `Available for ${result.model}: ${result.available.join(", ") || "(unknown)"}`,
+              `Config default saved: ${this.cfg.model.thinking}`,
+            ].join("\n");
+          }
+          return [
+            `Thinking effort set to **${result.level}**`,
+            `model: ${result.model}`,
+            `available: ${result.available.join(", ")}`,
+            `Saved as default in config.`,
+          ].join("\n");
+        } catch (err) {
+          return `Could not set effort: ${err instanceof Error ? err.message : String(err)}\nLevels: ${levels}`;
+        }
       }
 
       case "model": {

@@ -17,6 +17,13 @@ import { runSetup, runDoctor } from "./setup.js";
 import { loginProvider } from "./auth/login.js";
 import { getVersion } from "./version.js";
 import { describeLayout, getPaths } from "./paths.js";
+import {
+  getDaemonStatus,
+  restartDaemon,
+  startDaemon,
+  stopDaemon,
+  writeRuntimePid,
+} from "./daemon.js";
 
 const VERSION = getVersion();
 
@@ -135,29 +142,133 @@ program
     console.log(`env:            ${p.envFile}`);
   });
 
-program
+const gatewayCmd = program
   .command("gateway")
-  .description("Start the long-running gateway (Telegram + cron + agent)")
+  .description(
+    "Gateway process: run (foreground), start/stop (detached OS daemon for VPS)",
+  )
+  .option("--data-dir <path>", "Override data directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .option("--cwd <path>", "Coding tools working directory");
+
+async function runGatewayForeground(opts: {
+  dataDir?: string;
+  workspace?: string;
+  cwd?: string;
+}): Promise<void> {
+  const cfg = loadCfg(opts);
+  if (opts.cwd) cfg.cwd = opts.cwd;
+  writeRuntimePid(cfg.dataDir);
+  const gw = new Gateway(cfg);
+  const shutdown = async (sig: string) => {
+    console.log(chalk.yellow(`\n${sig} received, shutting down…`));
+    await gw.stop();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  await gw.start();
+  const mode = process.env.DISK_AGENT_DAEMON ? "detached" : "foreground";
+  console.log(
+    chalk.green(
+      `${cfg.agentName} gateway running (${mode}, pid ${process.pid}). Ctrl+C or: disk-agent gateway stop`,
+    ),
+  );
+  // Keep alive
+  await new Promise(() => {
+    /* never resolves */
+  });
+}
+
+// Default: foreground when `disk-agent gateway` with no subcommand
+gatewayCmd.action(async (opts) => {
+  await runGatewayForeground(opts);
+});
+
+gatewayCmd
+  .command("run")
+  .description("Run gateway in the foreground (also used by daemon worker)")
   .option("--data-dir <path>", "Override data directory")
   .option("--workspace <path>", "Override workspace directory")
   .option("--cwd <path>", "Coding tools working directory")
   .action(async (opts) => {
-    const cfg = loadCfg(opts);
-    if (opts.cwd) cfg.cwd = opts.cwd;
-    const gw = new Gateway(cfg);
-    const shutdown = async (sig: string) => {
-      console.log(chalk.yellow(`\n${sig} received, shutting down…`));
-      await gw.stop();
-      process.exit(0);
-    };
-    process.on("SIGINT", () => void shutdown("SIGINT"));
-    process.on("SIGTERM", () => void shutdown("SIGTERM"));
-    await gw.start();
-    console.log(chalk.green(`${cfg.agentName} gateway running. Ctrl+C to stop.`));
-    // Keep alive
-    await new Promise(() => {
-      /* never resolves */
+    // Merge parent opts if commander nested them
+    await runGatewayForeground(opts);
+  });
+
+gatewayCmd
+  .command("start")
+  .description("Start gateway as a detached OS process (survives logout / VPS)")
+  .option("--data-dir <path>", "Override data directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .option("--cwd <path>", "Coding tools working directory")
+  .action((opts) => {
+    const r = startDaemon({
+      dataDir: opts.dataDir,
+      workspaceDir: opts.workspace,
+      cwd: opts.cwd,
     });
+    if (r.ok) console.log(chalk.green(r.message));
+    else {
+      console.error(chalk.red(r.message));
+      process.exitCode = 1;
+    }
+  });
+
+gatewayCmd
+  .command("stop")
+  .description("Stop the detached gateway process")
+  .option("--data-dir <path>", "Override data directory")
+  .action((opts) => {
+    const r = stopDaemon(opts.dataDir);
+    if (r.ok) console.log(chalk.green(r.message));
+    else {
+      console.error(chalk.red(r.message));
+      process.exitCode = 1;
+    }
+  });
+
+gatewayCmd
+  .command("restart")
+  .description("Restart the detached gateway")
+  .option("--data-dir <path>", "Override data directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .option("--cwd <path>", "Coding tools working directory")
+  .action((opts) => {
+    const r = restartDaemon({
+      dataDir: opts.dataDir,
+      workspaceDir: opts.workspace,
+      cwd: opts.cwd,
+    });
+    if (r.ok) console.log(chalk.green(r.message));
+    else {
+      console.error(chalk.red(r.message));
+      process.exitCode = 1;
+    }
+  });
+
+gatewayCmd
+  .command("status")
+  .description("Show whether the detached gateway is running")
+  .option("--data-dir <path>", "Override data directory")
+  .action((opts) => {
+    const s = getDaemonStatus(opts.dataDir);
+    if (s.running) {
+      console.log(chalk.green(`Gateway running  pid=${s.pid}`));
+      if (s.startedAt) console.log(`  started: ${s.startedAt}`);
+      console.log(`  log:     ${s.logFile}`);
+      console.log(`  pidfile: ${s.pidFile}`);
+    } else if (s.stale) {
+      console.log(chalk.yellow(`Gateway not running (stale pid ${s.pid})`));
+      console.log(`  pidfile: ${s.pidFile}`);
+      console.log(`  log:     ${s.logFile}`);
+      process.exitCode = 1;
+    } else {
+      console.log(chalk.dim("Gateway not running"));
+      console.log(`  log:     ${s.logFile}`);
+      console.log(`  start:   disk-agent gateway start`);
+      process.exitCode = 1;
+    }
   });
 
 program

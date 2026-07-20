@@ -34,4 +34,12 @@ export {
 } from "./setup.js";
 export { loginProvider, hasAnyAuth, authStatus } from "./auth/login.js";
 export { getVersion } from "./version.js";
+export {
+  startDaemon,
+  stopDaemon,
+  restartDaemon,
+  getDaemonStatus,
+  writeRuntimePid,
+} from "./daemon.js";
+export { normalizeThinkingLevel, type ThinkingEffort } from "./agent/runtime.js";
 export type * from "./types.js";

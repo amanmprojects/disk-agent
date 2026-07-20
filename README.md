@@ -76,14 +76,25 @@ disk-agent status
 $EDITOR ~/.disk-agent/.env
 # TELEGRAM_BOT_TOKEN=...
 
-disk-agent gateway          # Telegram + cron
+# Detached (recommended on a VPS — survives logout)
+disk-agent gateway start
+disk-agent gateway status
+disk-agent gateway stop
+disk-agent gateway restart
+
+# Foreground (dev / Ctrl+C to stop)
+disk-agent gateway
 # or
 disk-agent chat             # local REPL only
 ```
 
+Logs: `~/.disk-agent/logs/gateway.log` · pid: `~/.disk-agent/gateway.pid`
+
 1. DM your bot on Telegram → pairing code  
 2. On the host: `disk-agent pair <CODE>`  
 3. Chat normally  
+
+Telegram extras: `/context` (context window usage), `/effort medium` (thinking level).  
 
 ### From source
 
@@ -186,7 +197,11 @@ disk-agent setup          Full bootstrap (home + pi + extensions + login)
 disk-agent login [prov]   SuperGrok / provider OAuth
 disk-agent doctor         Health check
 disk-agent paths          Print directory layout
-disk-agent gateway        Long-running Telegram + cron gateway
+disk-agent gateway        Foreground gateway (Telegram + cron)
+disk-agent gateway start  Detached OS process (VPS-friendly)
+disk-agent gateway stop   Stop detached gateway
+disk-agent gateway status Detached process status
+disk-agent gateway restart
 disk-agent chat           Interactive local REPL
 disk-agent pair <code>    Approve Telegram pairing
 disk-agent status         Config / SuperGrok auth status
@@ -196,6 +211,8 @@ disk-agent skills list|show|create|delete|paths
 disk-agent memory list|search|save
 disk-agent cron list|add|remove|run
 ```
+
+Chat slash commands include `/context` (window usage) and `/effort <level>` (thinking effort).
 
 ### Cron examples
 

@@ -324,6 +324,206 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * Context-window usage for a peer session (Pi getContextUsage).
+   * Loads/creates the session if needed so token estimate is available.
+   */
+  async getContextUsage(
+    channel: ChannelId,
+    peerId: string,
+    opts?: { chatId?: string; senderName?: string },
+  ): Promise<{
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+    model: string;
+    messageCount: number;
+    sessionKey: string;
+    bar: string;
+    note?: string;
+  }> {
+    await this.ensureReady();
+    const key = makeSessionKey(channel, peerId);
+    const rec = this.deps.sessions.getOrCreate(channel, peerId, opts?.senderName);
+    const stub: IncomingMessage = {
+      id: `ctx_${Date.now()}`,
+      channel,
+      peerId,
+      chatId: opts?.chatId,
+      senderName: opts?.senderName,
+      text: "",
+      timestamp: new Date().toISOString(),
+    };
+    const active = await this.getOrCreateSession(key, rec.sessionId, stub);
+    const model = active.session.model;
+    const modelLabel = model
+      ? `${(model as { provider?: string }).provider ?? this.deps.cfg.model.provider}/${(model as { id?: string }).id ?? this.deps.cfg.model.id}`
+      : `${this.deps.cfg.model.provider}/${this.deps.cfg.model.id}`;
+
+    let usage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+    try {
+      usage = active.session.getContextUsage?.();
+    } catch {
+      usage = undefined;
+    }
+
+    const contextWindow =
+      usage?.contextWindow ||
+      (model as { contextWindow?: number } | undefined)?.contextWindow ||
+      0;
+
+    // Fallback estimate from message text if API returns nothing useful
+    let tokens = usage?.tokens ?? null;
+    let percent = usage?.percent ?? null;
+    let note: string | undefined;
+
+    if (tokens == null && contextWindow > 0) {
+      const msgs = (active.session as unknown as { messages?: unknown[] }).messages;
+      if (Array.isArray(msgs) && msgs.length) {
+        const chars = JSON.stringify(msgs).length;
+        tokens = Math.ceil(chars / 4);
+        percent = (tokens / contextWindow) * 100;
+        note = "estimated (chars÷4) — no post-compaction usage yet";
+      } else {
+        note = "no messages in this session yet";
+        tokens = 0;
+        percent = 0;
+      }
+    } else if (tokens == null) {
+      note = "context size unknown (model context window not reported)";
+    }
+
+    const bar = formatUsageBar(percent);
+
+    return {
+      tokens,
+      contextWindow,
+      percent,
+      model: modelLabel,
+      messageCount: rec.messageCount,
+      sessionKey: key,
+      bar,
+      note,
+    };
+  }
+
+  /**
+   * Set thinking effort/level for a peer session + persist default in config.
+   * Levels: off | minimal | low | medium | high | xhigh (when model supports them).
+   */
+  async setThinkingEffort(
+    channel: ChannelId,
+    peerId: string,
+    level: string,
+    opts?: { chatId?: string; senderName?: string; persist?: boolean },
+  ): Promise<{
+    level: string;
+    available: string[];
+    applied: boolean;
+    model: string;
+  }> {
+    await this.ensureReady();
+    const normalized = normalizeThinkingLevel(level);
+    if (!normalized) {
+      throw new Error(
+        `Invalid effort level "${level}". Use: off, minimal, low, medium, high, xhigh`,
+      );
+    }
+
+    if (opts?.persist !== false) {
+      this.deps.cfg.model.thinking = normalized;
+    }
+
+    const key = makeSessionKey(channel, peerId);
+    const rec = this.deps.sessions.getOrCreate(channel, peerId, opts?.senderName);
+    const stub: IncomingMessage = {
+      id: `effort_${Date.now()}`,
+      channel,
+      peerId,
+      chatId: opts?.chatId,
+      senderName: opts?.senderName,
+      text: "",
+      timestamp: new Date().toISOString(),
+    };
+    const active = await this.getOrCreateSession(key, rec.sessionId, stub);
+
+    let available: string[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+    try {
+      const a = active.session.getAvailableThinkingLevels?.();
+      if (Array.isArray(a) && a.length) available = a.map(String);
+    } catch {
+      /* keep defaults */
+    }
+
+    let applied = false;
+    if (available.includes(normalized) || available.length === 0) {
+      try {
+        active.session.setThinkingLevel?.(normalized as never);
+        applied = true;
+      } catch (err) {
+        this.log.warn("setThinkingLevel failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Update any other cached sessions to the new default
+    for (const [, other] of this.cache) {
+      if (other === active) continue;
+      try {
+        other.session.setThinkingLevel?.(normalized as never);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const model = active.session.model as { provider?: string; id?: string } | undefined;
+    const modelLabel = model?.provider
+      ? `${model.provider}/${model.id}`
+      : `${this.deps.cfg.model.provider}/${this.deps.cfg.model.id}`;
+
+    return {
+      level: applied
+        ? String(active.session.thinkingLevel ?? normalized)
+        : normalized,
+      available,
+      applied,
+      model: modelLabel,
+    };
+  }
+
+  /** Current thinking effort for a peer (from live session or config). */
+  async getThinkingEffort(
+    channel: ChannelId,
+    peerId: string,
+  ): Promise<{ level: string; available: string[]; model: string }> {
+    await this.ensureReady();
+    const key = makeSessionKey(channel, peerId);
+    const cached = this.cache.get(key);
+    if (cached) {
+      let available: string[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+      try {
+        const a = cached.session.getAvailableThinkingLevels?.();
+        if (Array.isArray(a) && a.length) available = a.map(String);
+      } catch {
+        /* ignore */
+      }
+      const model = cached.session.model as { provider?: string; id?: string } | undefined;
+      return {
+        level: String(cached.session.thinkingLevel ?? this.deps.cfg.model.thinking),
+        available,
+        model: model?.provider
+          ? `${model.provider}/${model.id}`
+          : `${this.deps.cfg.model.provider}/${this.deps.cfg.model.id}`,
+      };
+    }
+    return {
+      level: this.deps.cfg.model.thinking,
+      available: ["off", "minimal", "low", "medium", "high", "xhigh"],
+      model: `${this.deps.cfg.model.provider}/${this.deps.cfg.model.id}`,
+    };
+  }
+
   /** List models useful for status / CLI. */
   async listModels(): Promise<Array<{ provider: string; id: string; auth: boolean }>> {
     await this.ensureReady();
@@ -724,10 +924,50 @@ function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + "…";
 }
 
-function mapThinking(
-  level: string,
-): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" {
-  const allowed = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
-  if (allowed.has(level)) return level as "off";
-  return "medium";
+export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+const THINKING_LEVELS = new Set<string>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+
+/** Aliases users may type for /effort */
+const THINKING_ALIASES: Record<string, ThinkingEffort> = {
+  none: "off",
+  "0": "off",
+  false: "off",
+  min: "minimal",
+  "1": "minimal",
+  "2": "low",
+  "3": "medium",
+  med: "medium",
+  "4": "high",
+  "5": "xhigh",
+  max: "xhigh",
+  maximum: "xhigh",
+  ultra: "xhigh",
+};
+
+export function normalizeThinkingLevel(raw: string): ThinkingEffort | null {
+  const s = raw.trim().toLowerCase();
+  if (THINKING_LEVELS.has(s)) return s as ThinkingEffort;
+  if (s in THINKING_ALIASES) return THINKING_ALIASES[s]!;
+  return null;
+}
+
+function mapThinking(level: string): ThinkingEffort {
+  return normalizeThinkingLevel(level) ?? "medium";
+}
+
+function formatUsageBar(percent: number | null, width = 20): string {
+  if (percent == null || !Number.isFinite(percent)) {
+    return "[" + "?".repeat(width) + "]";
+  }
+  const p = Math.max(0, Math.min(100, percent));
+  const filled = Math.round((p / 100) * width);
+  return "[" + "█".repeat(filled) + "░".repeat(width - filled) + "]";
 }

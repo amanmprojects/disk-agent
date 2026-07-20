@@ -87,6 +87,8 @@ Type / for command suggestions, or /help for the full list.`,
     this.bot.command("help", route("help"));
     this.bot.command("new", route("new"));
     this.bot.command("status", route("status"));
+    this.bot.command("context", route("context"));
+    this.bot.command("effort", route("effort"));
     this.bot.command("model", route("model"));
     this.bot.command("models", route("models"));
     this.bot.command("remember", route("remember"));
@@ -123,6 +125,12 @@ Type / for command suggestions, or /help for the full list.`,
           "help",
           "new",
           "status",
+          "context",
+          "ctx",
+          "usage",
+          "effort",
+          "thinking",
+          "think_level",
           "model",
           "models",
           "remember",
