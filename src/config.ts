@@ -1,10 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
 import { z } from "zod";
 import YAML from "yaml";
 import { config as loadDotenv } from "dotenv";
 import { seedBuiltinSkills } from "./skills/store.js";
+import {
+  ensureLayout,
+  getPaths,
+  resolveHomeDir,
+  resolveWorkspaceDir,
+} from "./paths.js";
 
 const CronDeliverSchema = z.object({
   channel: z.enum(["telegram", "cli", "cron", "system"]).default("telegram"),
@@ -154,22 +159,19 @@ export type AppConfig = z.infer<typeof ConfigSchema> & {
 };
 
 export function defaultDataDir(): string {
-  return join(homedir(), ".disk-agent");
+  return resolveHomeDir();
 }
 
 export function defaultWorkspaceDir(dataDir: string): string {
-  return join(dataDir, "workspace");
+  return resolveWorkspaceDir(dataDir);
 }
 
 export function resolvePaths(partial?: {
   dataDir?: string;
   workspaceDir?: string;
 }): { dataDir: string; workspaceDir: string } {
-  const dataDir = resolve(partial?.dataDir || process.env.DISK_AGENT_HOME || defaultDataDir());
-  const workspaceDir = resolve(
-    partial?.workspaceDir || process.env.DISK_AGENT_WORKSPACE || defaultWorkspaceDir(dataDir),
-  );
-  return { dataDir, workspaceDir };
+  const paths = getPaths({ home: partial?.dataDir, workspace: partial?.workspaceDir });
+  return { dataDir: paths.home, workspaceDir: paths.workspace };
 }
 
 export function configPath(dataDir: string): string {
@@ -333,7 +335,10 @@ Keep this lean. Move ephemeral detail to daily logs under memory/.
 - Use cron tools for recurring jobs; confirm schedule in plain English.
 
 ## Skills
-- Reusable workflows live in workspace/skills, .agents/skills, ~/.agents/skills
+- Reusable workflows live under the disk-agent home:
+  - workspace/skills (default for skill_create)
+  - skills/ (user-global)
+  - <project>/.agents/skills (project)
 - When a task matches a skill, load it (skill_load) and follow it
 - Create skills for repeated workflows (create-skill / skill_create)
 - Discover community skills via find-skills / skill_find (skills.sh)
@@ -389,25 +394,29 @@ export function writeEnvExample(dataDir: string): void {
 
 TELEGRAM_BOT_TOKEN=
 DISK_AGENT_OWNER_ID=
-# Preferred: SuperGrok / X subscription via pi-supergrok OAuth
-#   1. pi install npm:pi-supergrok   (or npm i pi-supergrok in this project)
-#   2. pi → /login supergrok
-# Tokens live in ~/.pi/agent/auth.json (shared with disk-agent)
+
+# Preferred: SuperGrok / X subscription OAuth
+#   disk-agent setup          # installs pi + pi-supergrok + login
+#   disk-agent login          # re-auth SuperGrok
+# Tokens live in ~/.pi/agent/auth.json (shared with the pi CLI)
 #
 # Or use an xAI API key:
 # XAI_API_KEY=
-#
+
 # Other providers (optional):
 # ANTHROPIC_API_KEY=
 # OPENAI_API_KEY=
-#
+
 # Model selection (provider/id):
 # DISK_AGENT_MODEL=supergrok/grok-4.5
 # DISK_AGENT_MODEL=supergrok/grok-4.3
 # DISK_AGENT_MODEL=supergrok/grok-composer-2.5-fast
 # DISK_AGENT_MODEL=xai/grok-4
 # DISK_AGENT_PROVIDER=supergrok
+
+# Paths (defaults shown):
 # DISK_AGENT_HOME=~/.disk-agent
+#   (or $XDG_DATA_HOME/disk-agent)
 # DISK_AGENT_WORKSPACE=~/.disk-agent/workspace
 # DISK_AGENT_CWD=
 `,
@@ -416,17 +425,13 @@ DISK_AGENT_OWNER_ID=
 }
 
 export function bootstrapHome(opts?: { dataDir?: string; workspaceDir?: string; agentName?: string }): AppConfig {
-  const paths = resolvePaths(opts);
-  ensureDir(paths.dataDir);
-  ensureDir(join(paths.dataDir, "sessions"));
-  ensureDir(join(paths.dataDir, "cron"));
-  ensureDir(join(paths.dataDir, "logs"));
-  ensureDir(join(paths.dataDir, "browser"));
-  ensureDir(join(paths.dataDir, "pairings"));
+  const layout = getPaths({ home: opts?.dataDir, workspace: opts?.workspaceDir });
+  ensureLayout(layout);
 
-  seedWorkspace(paths.workspaceDir, opts?.agentName ?? "Disk");
-  writeEnvExample(paths.dataDir);
+  seedWorkspace(layout.workspace, opts?.agentName ?? "Disk");
+  writeEnvExample(layout.home);
 
+  const paths = { dataDir: layout.home, workspaceDir: layout.workspace };
   let cfg: AppConfig;
   if (!existsSync(configPath(paths.dataDir))) {
     cfg = loadConfig(paths);

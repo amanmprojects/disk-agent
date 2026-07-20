@@ -6,7 +6,6 @@ import chalk from "chalk";
 import {
   bootstrapHome,
   loadConfig,
-  saveConfig,
   initProjectConfig,
   type AppConfig,
 } from "./config.js";
@@ -14,66 +13,121 @@ import { Gateway } from "./gateway.js";
 import { describeSchedule } from "./cron/scheduler.js";
 import { nowIso } from "./utils.js";
 import type { IncomingMessage } from "./types.js";
+import { runSetup, runDoctor } from "./setup.js";
+import { loginProvider } from "./auth/login.js";
+import { getVersion } from "./version.js";
+import { describeLayout, getPaths } from "./paths.js";
+
+const VERSION = getVersion();
 
 const program = new Command();
 
 program
   .name("disk-agent")
   .description("OpenClaw/Hermes-style personal AI agent gateway (Pi-powered)")
-  .version("0.1.0");
+  .version(VERSION);
 
 program
   .command("setup")
-  .description("Initialize ~/.disk-agent workspace, config, and identity files")
+  .description(
+    "One-command setup: home layout, pi CLI, extensions (pi-supergrok), SuperGrok login, config",
+  )
   .option("--name <name>", "Agent name", "Disk")
-  .option("--data-dir <path>", "Override data directory")
+  .option("--data-dir <path>", "Override home directory (~/.disk-agent)")
   .option("--workspace <path>", "Override workspace directory")
   .option("--telegram-token <token>", "Set Telegram bot token")
   .option("--owner <id>", "Telegram owner user id")
   .option("--model <provider/id>", "Default model, e.g. supergrok/grok-4.5")
-  .action((opts) => {
-    const cfg = bootstrapHome({
+  .option("--cwd <path>", "Default coding tools working directory")
+  .option("--skip-pi", "Skip installing pi CLI and extensions")
+  .option("--skip-login", "Skip SuperGrok OAuth login")
+  .option("--login", "Force SuperGrok login (even with --yes)")
+  .option("--force-login", "Re-run OAuth even if already authenticated")
+  .option("-y, --yes", "Non-interactive (no prompts; skip login unless --login)")
+  .option(
+    "--package <spec>",
+    "Extra pi package to install (repeatable), e.g. npm:pi-supergrok",
+    (v: string, acc: string[]) => {
+      acc.push(v);
+      return acc;
+    },
+    [] as string[],
+  )
+  .action(async (opts) => {
+    try {
+      await runSetup({
+        agentName: opts.name,
+        dataDir: opts.dataDir,
+        workspaceDir: opts.workspace,
+        telegramToken: opts.telegramToken,
+        ownerId: opts.owner,
+        model: opts.model,
+        cwd: opts.cwd,
+        skipPi: Boolean(opts.skipPi),
+        skipLogin: Boolean(opts.skipLogin),
+        forceLogin: Boolean(opts.forceLogin),
+        yes: Boolean(opts.yes),
+        login: Boolean(opts.login),
+        packages: opts.package?.length ? opts.package : undefined,
+      });
+      // Optional project-local sample when run from a repo
+      try {
+        initProjectConfig(process.cwd());
+      } catch {
+        /* ignore */
+      }
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("login")
+  .description("Log in to SuperGrok (or another Pi provider) via OAuth")
+  .argument("[provider]", "Provider id", "supergrok")
+  .option("--type <type>", "oauth | api_key", "oauth")
+  .option("--force", "Re-authenticate even if already logged in")
+  .action(async (provider: string, opts) => {
+    const type = opts.type === "api_key" ? "api_key" : "oauth";
+    const result = await loginProvider(provider || "supergrok", {
+      type,
+      force: Boolean(opts.force),
+    });
+    if (!result.ok) {
+      console.error(chalk.red(result.error));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("doctor")
+  .description("Check install, paths, pi extensions, and auth")
+  .option("--data-dir <path>", "Override home directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .action(async (opts) => {
+    const code = await runDoctor({
       dataDir: opts.dataDir,
       workspaceDir: opts.workspace,
-      agentName: opts.name,
     });
-    if (opts.telegramToken) {
-      cfg.telegram.botToken = opts.telegramToken;
-      cfg.telegram.enabled = true;
-    }
-    if (opts.owner) cfg.telegram.ownerId = String(opts.owner);
-    if (opts.model) {
-      const raw = String(opts.model);
-      if (raw.includes("/")) {
-        const [provider, ...rest] = raw.split("/");
-        if (provider && rest.length) {
-          cfg.model.provider = provider;
-          cfg.model.id = rest.join("/");
-        }
-      } else {
-        cfg.model.id = raw;
-      }
-    }
-    if (opts.name) cfg.agentName = opts.name;
-    saveConfig(cfg);
-    initProjectConfig(process.cwd());
-    console.log(chalk.green("✓ Disk Agent initialized"));
-    console.log(`  data:      ${cfg.dataDir}`);
-    console.log(`  workspace: ${cfg.workspaceDir}`);
-    console.log(`  config:    ${cfg.dataDir}/config.yaml`);
-    console.log(`  model:     ${cfg.model.provider}/${cfg.model.id}`);
-    console.log(`  env:       ${cfg.dataDir}/.env.example → copy to .env`);
+    process.exitCode = code;
+  });
+
+program
+  .command("paths")
+  .description("Print the standardized directory layout")
+  .option("--data-dir <path>", "Override home directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .action((opts) => {
+    const p = getPaths({ home: opts.dataDir, workspace: opts.workspace });
+    console.log(describeLayout(p));
     console.log("");
-    console.log("Auth (pick one):");
-    console.log("  • SuperGrok / X Premium:  pi → /login supergrok   (shares ~/.pi/agent/auth.json)");
-    console.log("  • xAI API key:            export XAI_API_KEY=...");
-    console.log("  • Other providers:        ANTHROPIC_API_KEY / OPENAI_API_KEY");
-    console.log("");
-    console.log("Next:");
-    console.log("  1. disk-agent models          # verify SuperGrok is visible");
-    console.log("  2. Create a Telegram bot via @BotFather and set TELEGRAM_BOT_TOKEN");
-    console.log("  3. disk-agent gateway");
-    console.log("  4. DM the bot, then: disk-agent pair <CODE>");
+    console.log(`home:           ${p.home}`);
+    console.log(`workspace:      ${p.workspace}`);
+    console.log(`user skills:    ${p.userSkills}`);
+    console.log(`workspace skills: ${p.workspaceSkills}`);
+    console.log(`config:         ${p.configFile}`);
+    console.log(`env:            ${p.envFile}`);
   });
 
 program
@@ -188,7 +242,7 @@ program
       // disk-agent cron add "name" "schedule" "prompt..."
       const [name, schedule, ...promptParts] = args;
       if (!name || !schedule || !promptParts.length) {
-        console.error('Usage: disk-agent cron add <name> <schedule> <prompt>');
+        console.error("Usage: disk-agent cron add <name> <schedule> <prompt>");
         process.exit(1);
       }
       const owner = cfg.telegram.ownerId;
@@ -333,7 +387,7 @@ program
       const [name, description, ...bodyParts] = args;
       if (!name || !description || !bodyParts.length) {
         console.error(
-          'Usage: disk-agent skills create <name> <description> <body markdown...>',
+          "Usage: disk-agent skills create <name> <description> <body markdown...>",
         );
         process.exit(1);
       }
@@ -373,12 +427,14 @@ program
   .action(async (opts) => {
     const cfg = loadCfg(opts);
     const gw = new Gateway(cfg);
-    console.log(chalk.bold(cfg.agentName));
+    console.log(chalk.bold(`${cfg.agentName}  v${VERSION}`));
     console.log(`data:      ${cfg.dataDir}`);
     console.log(`workspace: ${cfg.workspaceDir}`);
     console.log(`cwd:       ${cfg.cwd}`);
     console.log(`model:     ${cfg.model.provider}/${cfg.model.id}`);
-    console.log(`telegram:  ${cfg.telegram.enabled ? "enabled" : "disabled"} policy=${cfg.telegram.dmPolicy}`);
+    console.log(
+      `telegram:  ${cfg.telegram.enabled ? "enabled" : "disabled"} policy=${cfg.telegram.dmPolicy}`,
+    );
     console.log(`owner:     ${cfg.telegram.ownerId ?? "(none)"}`);
     console.log(`sessions:  ${gw.sessions.list().length}`);
     console.log(`cron:      ${gw.cron.list().length} jobs`);
@@ -393,7 +449,9 @@ program
         `supergrok: ${sg.length ? `${sg.length} models` : "not loaded"}` +
           (sg.some((m) => m.auth) ? chalk.green(" (auth ok)") : chalk.yellow(" (login needed)")),
       );
-      console.log(`auth any:  ${authOk ? chalk.green("yes") : chalk.yellow("no — run pi /login supergrok or set XAI_API_KEY")}`);
+      console.log(
+        `auth any:  ${authOk ? chalk.green("yes") : chalk.yellow("no — run disk-agent login or set XAI_API_KEY")}`,
+      );
     } catch (err) {
       console.log(chalk.red(`pi/auth:   ${err instanceof Error ? err.message : String(err)}`));
     }
@@ -413,7 +471,7 @@ program
     await gw.agent.ensureReady();
     const models = await gw.agent.listModels();
     if (!models.length) {
-      console.log("No models found. Install pi-supergrok and run: pi → /login supergrok");
+      console.log("No models found. Run: disk-agent setup   (or disk-agent login)");
       process.exitCode = 1;
       return;
     }

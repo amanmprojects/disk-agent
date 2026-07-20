@@ -11,6 +11,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { AppConfig } from "../config.js";
+import { getPaths } from "../paths.js";
 import { ensureDir, nowIso } from "../utils.js";
 
 export interface SkillInfo {
@@ -38,18 +39,23 @@ export class SkillsStore {
 
   constructor(cfg: AppConfig) {
     this.cwd = cfg.cwd;
-    this.workspaceSkillsDir = join(cfg.workspaceDir, "skills");
-    this.projectSkillsDir = join(cfg.cwd, ".agents", "skills");
-    this.userSkillsDir = join(homedir(), ".agents", "skills");
+    const layout = getPaths({ home: cfg.dataDir, workspace: cfg.workspaceDir });
+    this.workspaceSkillsDir = layout.workspaceSkills;
+    this.projectSkillsDir = layout.projectSkills(cfg.cwd);
+    // Standardized: user skills live under disk-agent home (not ~/.agents/skills).
+    this.userSkillsDir = layout.userSkills;
     ensureDir(this.workspaceSkillsDir);
+    ensureDir(this.userSkillsDir);
   }
 
   /** All directories Pi + disk-agent should scan for skills. */
   discoveryPaths(): string[] {
-    const paths = [
+    const candidates = [
       this.workspaceSkillsDir,
       this.projectSkillsDir,
       this.userSkillsDir,
+      // Interop: legacy / ecosystem locations
+      join(homedir(), ".agents", "skills"),
       join(homedir(), ".pi", "agent", "skills"),
       join(this.cwd, ".pi", "skills"),
       join(this.cwd, ".agents", "skills"),
@@ -57,7 +63,7 @@ export class SkillsStore {
     // unique existing
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const p of paths) {
+    for (const p of candidates) {
       const abs = resolve(p);
       if (seen.has(abs)) continue;
       seen.add(abs);
@@ -394,7 +400,7 @@ Create a focused, reusable skill package the agent can load later.
 Ask only what's missing:
 
 1. **name** — e.g. \`pr-review\`
-2. **scope** — \`workspace\` (default, ~/.disk-agent/workspace/skills), \`project\` (.agents/skills), or \`user\` (~/.agents/skills)
+2. **scope** — \`workspace\` (default, ~/.disk-agent/workspace/skills), \`project\` (<cwd>/.agents/skills), or \`user\` (~/.disk-agent/skills)
 3. **what it does** — workflow / repeated prompt / domain steps
 
 ### 2. Draft description

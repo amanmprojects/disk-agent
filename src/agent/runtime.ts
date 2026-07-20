@@ -671,7 +671,7 @@ function buildSystemPrompt(opts: {
 ## Environment
 - Workspace (identity & memory files): ${opts.workspaceDir}
 - Working directory (coding tools cwd): ${opts.cwd}
-- Skills live under: ${opts.workspaceDir}/skills (workspace), .agents/skills (project), ~/.agents/skills (user)
+- Skills live under: ${opts.workspaceDir}/skills (workspace), ~/.disk-agent/skills (user), <cwd>/.agents/skills (project)
 - Current channel: ${opts.channel}
 - Preferred model config: ${opts.modelLabel}
 

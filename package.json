@@ -1,7 +1,7 @@
 {
   "name": "disk-agent",
-  "version": "0.1.0",
-  "description": "OpenClaw/Hermes-style personal AI agent gateway powered by Pi",
+  "version": "1.0.0",
+  "description": "OpenClaw/Hermes-style personal AI agent gateway powered by Pi — Telegram, memory, cron, SuperGrok",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,16 +18,20 @@
     "dist",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
     "disk-agent.config.example.yaml"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/cli.js",
+    "clean": "rm -rf dist",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "gateway": "tsx src/cli.ts gateway",
     "setup": "tsx src/cli.ts setup",
-    "test": "tsx --test test/**/*.test.ts"
+    "test": "tsx --test test/**/*.test.ts",
+    "prepublishOnly": "npm run clean && npm run build && npm test",
+    "pack:check": "npm run prepublishOnly && npm pack --dry-run"
   },
   "engines": {
     "node": ">=20.6.0"
@@ -42,9 +46,23 @@
     "xai",
     "grok",
     "cron",
-    "memory"
+    "memory",
+    "personal-agent",
+    "gateway"
   ],
   "license": "MIT",
+  "author": "Disk Agent contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amanmprojects/disk-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/amanmprojects/disk-agent/issues"
+  },
+  "homepage": "https://github.com/amanmprojects/disk-agent#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
     "chalk": "^5.6.2",
