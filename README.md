@@ -132,9 +132,30 @@ disk-agent pair <code>    Approve Telegram pairing
 disk-agent status         Config / SuperGrok auth status
 disk-agent models         List SuperGrok / xAI / other models
 disk-agent sessions       List conversation sessions
+disk-agent skills list|show|create|delete|paths
 disk-agent memory list|search|save
 disk-agent cron list|add|remove|run
 ```
+
+### Skills
+
+Skills are reusable `SKILL.md` packages ([Agent Skills](https://agentskills.io) standard).
+
+| Location | Scope |
+|----------|--------|
+| `~/.disk-agent/workspace/skills/` | Workspace (default for `skill_create`) |
+| `<cwd>/.agents/skills/` | Project |
+| `~/.agents/skills/` | User-global |
+
+Built-ins seeded on setup:
+
+- **create-skill** — guided skill authoring (inspired by siviter-xyz/dot-agent)
+- **find-skills** — discover/install from [skills.sh](https://skills.sh) / `npx skills`
+- **remember** — persist facts via memory tools
+
+Agent tools: `skill_list`, `skill_load`, `skill_create`, `skill_delete`, `skill_find`, `skill_install`.
+
+Telegram: `/skills`, `/skills use create-skill`, `/skills create`, `/skills find react`.
 
 ### Cron examples
 

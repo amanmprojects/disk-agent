@@ -4,6 +4,8 @@ import type { BrowserService } from "../browser/service.js";
 import type { CronScheduler } from "../cron/scheduler.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { SessionRegistry } from "../session/manager.js";
+import type { SkillsStore } from "../skills/store.js";
+import { createSkillTools, SKILL_TOOL_NAMES } from "../skills/tools.js";
 import { describeSchedule } from "../cron/scheduler.js";
 import type { ChannelId } from "../types.js";
 
@@ -12,6 +14,7 @@ export interface ToolContext {
   cron: CronScheduler;
   browser: BrowserService;
   sessions: SessionRegistry;
+  skills: SkillsStore;
   /** Default delivery target for cron jobs created from this chat */
   defaultDeliver?: {
     channel: ChannelId;
@@ -41,6 +44,7 @@ export const DISK_TOOL_NAMES = [
   "browser_close",
   "session_list",
   "session_reset",
+  ...SKILL_TOOL_NAMES,
 ] as const;
 
 export const BUILTIN_TOOL_NAMES = [
@@ -422,5 +426,6 @@ export function createDiskTools(ctx: ToolContext) {
     browser_close,
     session_list,
     session_reset,
+    ...createSkillTools(ctx.skills),
   ];
 }

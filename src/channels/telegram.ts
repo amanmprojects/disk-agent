@@ -2,9 +2,15 @@ import { Bot, type Context } from "grammy";
 import { join } from "node:path";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import type { IncomingMessage, OutgoingMessage, PairingRequest } from "../types.js";
+import type {
+  IncomingMessage,
+  MessageAttachment,
+  OutgoingMessage,
+  PairingRequest,
+} from "../types.js";
 import { chunkText, ensureDir, nowIso, readJson, uid, writeJson } from "../utils.js";
 import { helpText, telegramMenuPayload } from "./commands.js";
+import { downloadTelegramFile, guessMime, isImageMime } from "./media.js";
 
 export type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -88,6 +94,7 @@ Type / for command suggestions, or /help for the full list.`,
     this.bot.command("cron", route("cron"));
     this.bot.command("browser", route("browser"));
     this.bot.command("tools", route("tools"));
+    this.bot.command("skills", route("skills"));
     this.bot.command("thoughts", route("thoughts"));
     this.bot.command("steps", route("steps"));
     this.bot.command("verbose", route("verbose"));
@@ -123,6 +130,7 @@ Type / for command suggestions, or /help for the full list.`,
           "cron",
           "browser",
           "tools",
+          "skills",
           "thoughts",
           "reasoning",
           "think",
@@ -142,11 +150,34 @@ Type / for command suggestions, or /help for the full list.`,
       if (this.handler) await this.handler(msg);
     });
 
+    // Photos (with or without caption)
+    this.bot.on("message:photo", async (ctx) => {
+      if (!(await this.guard(ctx))) return;
+      if (!(await this.groupOk(ctx))) return;
+      await this.handleMediaMessage(ctx);
+    });
+
+    // Image documents, stickers, other media with optional caption
+    this.bot.on("message:document", async (ctx) => {
+      if (!(await this.guard(ctx))) return;
+      if (!(await this.groupOk(ctx))) return;
+      await this.handleMediaMessage(ctx);
+    });
+
+    this.bot.on("message:sticker", async (ctx) => {
+      if (!(await this.guard(ctx))) return;
+      if (!(await this.groupOk(ctx))) return;
+      await this.handleMediaMessage(ctx);
+    });
+
+    // Captions for non-photo media that still carry caption-only delivery
+    // (photo/document handlers already cover the common cases)
     this.bot.on("message:caption", async (ctx) => {
       if (!(await this.guard(ctx))) return;
-      const caption = ctx.message.caption ?? "";
-      const msg = this.toIncoming(ctx, caption || "[attachment]");
-      if (this.handler) await this.handler(msg);
+      if (!(await this.groupOk(ctx))) return;
+      // Avoid double-handling when photo/document already processed
+      if (ctx.message.photo?.length || ctx.message.document || ctx.message.sticker) return;
+      await this.handleMediaMessage(ctx);
     });
 
     this.bot.catch((err) => {
@@ -342,7 +373,11 @@ Type / for command suggestions, or /help for the full list.`,
     return false;
   }
 
-  private toIncoming(ctx: Context, text: string): IncomingMessage {
+  private toIncoming(
+    ctx: Context,
+    text: string,
+    attachments?: MessageAttachment[],
+  ): IncomingMessage {
     const userId = String(ctx.from?.id ?? "");
     const chatId = String(ctx.chat?.id ?? "");
     // DMs: peer = user; groups: peer = chat
@@ -357,7 +392,142 @@ Type / for command suggestions, or /help for the full list.`,
       chatId,
       text,
       timestamp: nowIso(),
+      attachments,
     };
+  }
+
+  private async groupOk(ctx: Context): Promise<boolean> {
+    if (ctx.chat?.type === "private") return true;
+    if (!this.cfg.telegram.groupsRequireMention) return true;
+    const botInfo = ctx.me;
+    const text = ctx.message?.text || ctx.message?.caption || "";
+    const mentioned =
+      text.includes(`@${botInfo.username}`) ||
+      [...(ctx.message?.entities ?? []), ...(ctx.message?.caption_entities ?? [])].some(
+        (e) => e.type === "mention",
+      );
+    // Photos in groups without mention: still allow if it's a reply to the bot
+    const replyToBot =
+      ctx.message?.reply_to_message?.from?.id != null &&
+      ctx.message.reply_to_message.from.id === ctx.me.id;
+    return mentioned || replyToBot;
+  }
+
+  private async handleMediaMessage(ctx: Context): Promise<void> {
+    const token = this.cfg.telegram.botToken;
+    if (!token) return;
+
+    const caption = (ctx.message?.caption || "").trim();
+    const attachments: MessageAttachment[] = [];
+    const notes: string[] = [];
+
+    try {
+      // Largest photo size
+      const photos = ctx.message?.photo;
+      if (photos?.length) {
+        const best = photos[photos.length - 1]!;
+        try {
+          const dl = await downloadTelegramFile({
+            token,
+            fileId: best.file_id,
+            dataDir: this.cfg.dataDir,
+            fileName: `photo_${best.file_unique_id}.jpg`,
+            mimeType: "image/jpeg",
+            type: "photo",
+            caption: caption || undefined,
+          });
+          dl.attachment.width = best.width;
+          dl.attachment.height = best.height;
+          attachments.push(dl.attachment);
+          notes.push(`photo ${best.width}x${best.height}`);
+        } catch (err) {
+          this.log.warn("photo download failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          notes.push("photo (download failed)");
+        }
+      }
+
+      const doc = ctx.message?.document;
+      if (doc) {
+        const mime = doc.mime_type || guessMime(doc.file_name);
+        try {
+          const dl = await downloadTelegramFile({
+            token,
+            fileId: doc.file_id,
+            dataDir: this.cfg.dataDir,
+            fileName: doc.file_name || `doc_${doc.file_unique_id}`,
+            mimeType: mime,
+            type: isImageMime(mime) ? "document" : "document",
+            caption: caption || undefined,
+          });
+          // Only keep base64 for images; large binaries stay on disk
+          if (!isImageMime(dl.attachment.mimeType)) {
+            delete dl.attachment.base64;
+          }
+          attachments.push(dl.attachment);
+          notes.push(`document ${doc.file_name || mime}`);
+        } catch (err) {
+          this.log.warn("document download failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          notes.push(`document (download failed)`);
+        }
+      }
+
+      const sticker = ctx.message?.sticker;
+      if (sticker) {
+        // Static stickers are webp; animated/video stickers are less useful for vision
+        const isStatic = !sticker.is_animated && !sticker.is_video;
+        if (isStatic) {
+          try {
+            const dl = await downloadTelegramFile({
+              token,
+              fileId: sticker.file_id,
+              dataDir: this.cfg.dataDir,
+              fileName: `sticker_${sticker.file_unique_id}.webp`,
+              mimeType: "image/webp",
+              type: "sticker",
+              caption: sticker.emoji || undefined,
+            });
+            attachments.push(dl.attachment);
+            notes.push(`sticker ${sticker.emoji || ""}`.trim());
+          } catch (err) {
+            this.log.warn("sticker download failed", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        } else {
+          notes.push("animated/video sticker (not downloaded)");
+        }
+      }
+    } catch (err) {
+      this.log.error("media handling failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const imageCount = attachments.filter((a) => isImageMime(a.mimeType) && a.base64).length;
+    const defaultText =
+      caption ||
+      (imageCount
+        ? `[User sent ${imageCount} image${imageCount > 1 ? "s" : ""}${notes.length ? `: ${notes.join(", ")}` : ""}. Describe/analyze what you see and help with their request.]`
+        : attachments.length
+          ? `[User sent attachment${attachments.length > 1 ? "s" : ""}${notes.length ? `: ${notes.join(", ")}` : ""}. Paths are on disk — use tools if needed.]`
+          : "[User sent media that could not be downloaded.]");
+
+    // Brief ack while the agent works
+    if (ctx.chat?.id) {
+      void this.typing(String(ctx.chat.id));
+    }
+
+    const msg = this.toIncoming(ctx, defaultText, attachments.length ? attachments : undefined);
+    this.log.info("media message", {
+      attachments: attachments.length,
+      images: imageCount,
+      caption: caption.slice(0, 80),
+    });
+    if (this.handler) await this.handler(msg);
   }
 
   private async emitCommand(ctx: Context, text: string): Promise<void> {

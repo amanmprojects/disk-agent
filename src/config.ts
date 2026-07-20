@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { z } from "zod";
 import YAML from "yaml";
 import { config as loadDotenv } from "dotenv";
+import { seedBuiltinSkills } from "./skills/store.js";
 
 const CronDeliverSchema = z.object({
   channel: z.enum(["telegram", "cli", "cron", "system"]).default("telegram"),
@@ -251,7 +252,7 @@ export function saveConfig(cfg: AppConfig): void {
 }
 
 /** Seed workspace identity files if missing (OpenClaw-style). */
-export function seedWorkspace(workspaceDir: string, agentName = "Disk"): void {
+export function seedWorkspace(workspaceDir: string, agentName = "Disk", projectCwd = process.cwd()): void {
   ensureDir(workspaceDir);
   ensureDir(join(workspaceDir, "memory"));
   ensureDir(join(workspaceDir, "skills"));
@@ -331,6 +332,12 @@ Keep this lean. Move ephemeral detail to daily logs under memory/.
 - Use memory tools to persist facts the user asks you to remember.
 - Use cron tools for recurring jobs; confirm schedule in plain English.
 
+## Skills
+- Reusable workflows live in workspace/skills, .agents/skills, ~/.agents/skills
+- When a task matches a skill, load it (skill_load) and follow it
+- Create skills for repeated workflows (create-skill / skill_create)
+- Discover community skills via find-skills / skill_find (skills.sh)
+
 ## Write It Down
 Mental notes vanish when the session ends. Files persist. When in doubt, write it down.
 `,
@@ -367,29 +374,8 @@ On each heartbeat, quickly scan:
     }
   }
 
-  // Example skill
-  const skillDir = join(workspaceDir, "skills", "remember");
-  const skillFile = join(skillDir, "SKILL.md");
-  if (!existsSync(skillFile)) {
-    ensureDir(skillDir);
-    writeFileSync(
-      skillFile,
-      `---
-name: remember
-description: Persist user facts and preferences into MEMORY.md / memory tools.
----
-
-# Remember
-
-When the user says "remember that..." or shares a stable preference:
-
-1. Call \`memory_save\` with a clear, atomic fact.
-2. Optionally update USER.md if it is profile-level.
-3. Confirm briefly what you stored.
-`,
-      "utf8",
-    );
-  }
+  // Built-in skills: create-skill, find-skills, remember
+  seedBuiltinSkills(workspaceDir, projectCwd);
 }
 
 export function writeEnvExample(dataDir: string): void {

@@ -13,4 +13,5 @@ export {
   piAgentDir,
 } from "./agent/pi.js";
 export { TelegramChannel } from "./channels/telegram.js";
+export { SkillsStore, seedBuiltinSkills } from "./skills/store.js";
 export type * from "./types.js";

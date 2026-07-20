@@ -21,6 +21,7 @@ export const TELEGRAM_MENU_COMMANDS: BotCommandDef[] = [
   { command: "cron", description: "List scheduled jobs", menu: true },
   { command: "browser", description: "Browser tools status / quick open", menu: true },
   { command: "tools", description: "List agent tools", menu: true },
+  { command: "skills", description: "List / use / create skills", menu: true },
   { command: "thoughts", description: "Show/hide model reasoning on|off", menu: true },
   { command: "steps", description: "Show/hide tool activity on|off", menu: true },
   { command: "verbose", description: "Toggle thoughts+steps together", menu: true },
@@ -55,9 +56,12 @@ export function helpText(agentName: string): string {
     `/thoughts on  — include model reasoning`,
     `/steps on     — show tool calls in the reply`,
     `/verbose on   — both of the above`,
+    `/skills`,
+    `/skills use create-skill`,
+    `/skills create`,
     ``,
-    `*Just chat* for coding, browsing, cron setup, etc.`,
-    `The agent has tools: read, bash, edit, write, browser_*, memory_*, cron_*, web_get.`,
+    `*Just chat* for coding, browsing, cron setup, skills, etc.`,
+    `Tools: read, bash, edit, write, browser_*, memory_*, cron_*, skill_*, web_get.`,
   ];
   return lines.join("\n");
 }

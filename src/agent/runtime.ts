@@ -13,7 +13,9 @@ import type { CronScheduler } from "../cron/scheduler.js";
 import type { Logger } from "../logger.js";
 import type { MemoryStore } from "../memory/store.js";
 import { SessionRegistry, makeSessionKey } from "../session/manager.js";
+import type { SkillsStore } from "../skills/store.js";
 import type { AgentRunResult, ChannelId, IncomingMessage, LiveProgressEvent } from "../types.js";
+import { attachmentsToImages, describeAttachments } from "../channels/media.js";
 import { ALL_AGENT_TOOL_NAMES, createDiskTools } from "./tools.js";
 import {
   bootstrapSupergrok,
@@ -30,6 +32,7 @@ export interface RuntimeDeps {
   cron: CronScheduler;
   browser: BrowserService;
   sessions: SessionRegistry;
+  skills: SkillsStore;
 }
 
 interface ActiveSession {
@@ -227,11 +230,20 @@ export class AgentRuntime {
       });
 
       const prompt = this.formatUserPrompt(message);
-      await active.session.prompt(prompt);
+      const images = attachmentsToImages(message.attachments);
+      if (images.length) {
+        this.log.info(`sending ${images.length} image(s) to model`);
+        await active.session.prompt(prompt, { images });
+      } else {
+        await active.session.prompt(prompt);
+      }
       // Flush any pending thought/step deliveries before returning
       await chain;
 
-      finalText = partials.join("").trim() || (await this.extractLastAssistantText(active.session));
+      finalText =
+        partials.join("").trim() ||
+        (await this.extractLastAssistantText(active.session)) ||
+        (await this.extractLastAssistantError(active.session));
 
       // Fallback: models that only attach thinking on the final message
       if (captureThoughts && !completedThoughts.length) {
@@ -356,7 +368,7 @@ export class AgentRuntime {
       this.cache.delete(key);
     }
 
-    const { cfg, memory, cron, browser, sessions } = this.deps;
+    const { cfg, memory, cron, browser, sessions, skills } = this.deps;
     const cwd = cfg.cwd;
     const modelRuntime = await getSharedModelRuntime(this.log);
 
@@ -381,11 +393,13 @@ export class AgentRuntime {
       cron,
       browser,
       sessions,
+      skills,
       defaultDeliver: deliver,
       workspaceDir: cfg.workspaceDir,
     });
 
     const bootstrap = memory.buildBootstrapContext(cfg);
+    const skillCatalog = skills.catalogText(50);
     const systemPrompt = buildSystemPrompt({
       agentName: cfg.agentName,
       workspaceDir: cfg.workspaceDir,
@@ -393,6 +407,7 @@ export class AgentRuntime {
       channel: message.channel,
       bootstrap,
       modelLabel: `${cfg.model.provider}/${cfg.model.id}`,
+      skillCatalog,
     });
 
     const ext = resolveSupergrokExtension();
@@ -402,7 +417,8 @@ export class AgentRuntime {
       cwd,
       agentDir: this.agentDir,
       settingsManager,
-      additionalSkillPaths: [join(cfg.workspaceDir, "skills")],
+      // Workspace + project + user skill roots (Pi also auto-discovers .agents/skills)
+      additionalSkillPaths: skills.discoveryPaths(),
       additionalExtensionPaths: ext ? [ext] : [],
       systemPromptOverride: () => systemPrompt,
       appendSystemPromptOverride: () => [],
@@ -491,19 +507,25 @@ export class AgentRuntime {
   }
 
   private formatUserPrompt(message: IncomingMessage): string {
+    const images = attachmentsToImages(message.attachments);
     const bits = [
       `[channel=${message.channel} peer=${message.peerId}` +
         (message.senderName ? ` sender=${message.senderName}` : "") +
         (message.userId ? ` userId=${message.userId}` : "") +
-        ` time=${message.timestamp}]`,
+        ` time=${message.timestamp}` +
+        (images.length ? ` images=${images.length}` : "") +
+        `]`,
       "",
-      message.text,
+      message.text || (images.length ? "(see attached image)" : ""),
     ];
     if (message.attachments?.length) {
       bits.push("", "Attachments:");
-      for (const a of message.attachments) {
+      bits.push(describeAttachments(message.attachments));
+      if (images.length) {
         bits.push(
-          `- ${a.type}${a.fileName ? ` ${a.fileName}` : ""}${a.localPath ? ` path=${a.localPath}` : ""}${a.caption ? ` caption=${a.caption}` : ""}`,
+          "",
+          "The image(s) above are attached as vision input. Analyze them directly.",
+          "Saved copies are also on disk at the paths listed if you need file tools.",
         );
       }
     }
@@ -527,6 +549,31 @@ export class AgentRuntime {
               .join("");
           }
         }
+      }
+    } catch {
+      /* ignore */
+    }
+    return "";
+  }
+
+  private async extractLastAssistantError(session: AgentSession): Promise<string> {
+    try {
+      const messages = (session as unknown as { messages?: unknown[] }).messages;
+      if (!Array.isArray(messages)) return "";
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i] as {
+          role?: string;
+          stopReason?: string;
+          errorMessage?: string;
+          error?: string;
+        };
+        if (m?.role !== "assistant") continue;
+        if (m.stopReason === "error" || m.errorMessage || m.error) {
+          const err = m.errorMessage || m.error || "unknown model error";
+          this.log.warn("assistant error", { error: err, stopReason: m.stopReason });
+          return `Model error: ${err}`;
+        }
+        break;
       }
     } catch {
       /* ignore */
@@ -617,12 +664,14 @@ function buildSystemPrompt(opts: {
   channel: ChannelId;
   bootstrap: string;
   modelLabel: string;
+  skillCatalog: string;
 }): string {
   return `You are ${opts.agentName}, a self-hosted personal AI agent (OpenClaw/Hermes-style) running via the Pi coding-agent runtime.
 
 ## Environment
 - Workspace (identity & memory files): ${opts.workspaceDir}
 - Working directory (coding tools cwd): ${opts.cwd}
+- Skills live under: ${opts.workspaceDir}/skills (workspace), .agents/skills (project), ~/.agents/skills (user)
 - Current channel: ${opts.channel}
 - Preferred model config: ${opts.modelLabel}
 
@@ -633,6 +682,19 @@ You have coding tools (read, bash, edit, write, grep, find, ls) plus:
 - web_get — plain HTTP fetch + HTML→text (no JS). Good for static pages.
 - browser_open / browser_snapshot / browser_click / browser_fill / browser_screenshot / browser_eval / browser_close — **real browser automation** via agent-browser
 - session_list / session_reset — conversation session management
+- skill_list / skill_load / skill_create / skill_delete / skill_find / skill_install — **skills system**
+- **Vision:** users may attach photos/images from Telegram. When images are present they are included as vision input — describe and act on what you see. File copies are also saved under the workspace media dir for tool use.
+
+## Skills (important)
+Skills are reusable SKILL.md packages (Agent Skills standard). Progressive disclosure:
+1. Catalog (names + descriptions) is listed below and via skill_list.
+2. When a task matches a skill, call **skill_load(name)** and follow its instructions.
+3. To save a repeated workflow: follow **create-skill** (skill_load create-skill) or call **skill_create**.
+4. To discover community skills: skill_load find-skills, or skill_find / skill_install (skills.sh ecosystem).
+Do not claim you cannot create or install skills — tools are registered.
+
+### Installed skills catalog
+${opts.skillCatalog}
 
 ## Browser usage (important)
 When the user asks to "use the browser", interact with a site, click, fill forms, log in, or handle JS-rendered pages:
@@ -652,6 +714,7 @@ Prefer browser_* over web_get for interactive tasks. Use web_get only for quick 
 5. Never exfiltrate secrets. Ask before destructive operations.
 6. On HEARTBEAT turns: if nothing needs attention, reply exactly HEARTBEAT_OK.
 7. Read workspace files (SOUL.md, USER.md, MEMORY.md) when you need deeper context; they are also partially injected below.
+8. When a skill matches the task, load it — don't reinvent the workflow from scratch.
 
 ${opts.bootstrap}
 `;

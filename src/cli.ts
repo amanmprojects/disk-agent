@@ -286,6 +286,87 @@ program
   });
 
 program
+  .command("skills")
+  .description("List, show, create, or delete agent skills")
+  .option("--data-dir <path>", "Override data directory")
+  .argument("[action]", "list | show | create | delete | paths", "list")
+  .argument("[args...]", "name / fields")
+  .action(async (action: string, args: string[], opts) => {
+    const cfg = loadCfg(opts);
+    const gw = new Gateway(cfg);
+    const act = (action || "list").toLowerCase();
+
+    if (act === "list" || act === "ls") {
+      const skills = gw.skills.list();
+      if (!skills.length) {
+        console.log("No skills found.");
+        return;
+      }
+      for (const s of skills) {
+        console.log(`${s.name.padEnd(22)} [${s.source}]  ${s.description.slice(0, 80)}`);
+      }
+      return;
+    }
+
+    if (act === "paths") {
+      for (const p of gw.skills.discoveryPaths()) console.log(p);
+      return;
+    }
+
+    if (act === "show" || act === "cat") {
+      const name = args[0];
+      if (!name) {
+        console.error("Usage: disk-agent skills show <name>");
+        process.exit(1);
+      }
+      const body = gw.skills.readBody(name);
+      if (!body) {
+        console.error(`Not found: ${name}`);
+        process.exit(1);
+      }
+      console.log(body);
+      return;
+    }
+
+    if (act === "create") {
+      // disk-agent skills create <name> <description> <body...>
+      const [name, description, ...bodyParts] = args;
+      if (!name || !description || !bodyParts.length) {
+        console.error(
+          'Usage: disk-agent skills create <name> <description> <body markdown...>',
+        );
+        process.exit(1);
+      }
+      const r = gw.skills.create({
+        name,
+        description,
+        body: bodyParts.join(" "),
+        scope: "workspace",
+      });
+      if (!r.ok) {
+        console.error(r.error);
+        process.exit(1);
+      }
+      console.log(`Created ${r.skill.path}`);
+      return;
+    }
+
+    if (act === "delete" || act === "rm") {
+      const name = args[0];
+      if (!name) {
+        console.error("Usage: disk-agent skills delete <name>");
+        process.exit(1);
+      }
+      const r = gw.skills.delete(name);
+      console.log(r.ok ? `Deleted ${r.path}` : r.error);
+      return;
+    }
+
+    console.error(`Unknown action ${act}`);
+    process.exit(1);
+  });
+
+program
   .command("status")
   .description("Show configuration and runtime status")
   .option("--data-dir <path>", "Override data directory")
@@ -302,6 +383,7 @@ program
     console.log(`sessions:  ${gw.sessions.list().length}`);
     console.log(`cron:      ${gw.cron.list().length} jobs`);
     console.log(`memory:    ${gw.memory.listFacts().length} facts`);
+    console.log(`skills:    ${gw.skills.list().length}`);
     try {
       await gw.agent.ensureReady();
       const models = await gw.agent.listModels();

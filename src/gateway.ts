@@ -7,6 +7,7 @@ import { CronScheduler, cronJobToIncoming, describeSchedule } from "./cron/sched
 import { Logger, defaultLogPath } from "./logger.js";
 import { MemoryStore } from "./memory/store.js";
 import { SessionRegistry, makeSessionKey } from "./session/manager.js";
+import { SkillsStore } from "./skills/store.js";
 import type {
   AgentRunResult,
   CronJob,
@@ -41,6 +42,7 @@ export class Gateway {
   readonly telegram: TelegramChannel;
   readonly agent: AgentRuntime;
   readonly prefs: PrefsStore;
+  readonly skills: SkillsStore;
   private queue = new KeyedQueue();
   private started = false;
 
@@ -53,6 +55,7 @@ export class Gateway {
     this.browser = new BrowserService(cfg, this.log);
     this.telegram = new TelegramChannel(cfg, this.log);
     this.prefs = new PrefsStore(cfg);
+    this.skills = new SkillsStore(cfg);
     this.agent = new AgentRuntime({
       cfg,
       log: this.log,
@@ -60,6 +63,7 @@ export class Gateway {
       cron: this.cron,
       browser: this.browser,
       sessions: this.sessions,
+      skills: this.skills,
     });
   }
 
@@ -409,6 +413,7 @@ export class Gateway {
         const browser = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("browser_") || t === "web_get");
         const memory = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("memory_"));
         const cron = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("cron_"));
+        const skill = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("skill_"));
         const builtin = ALL_AGENT_TOOL_NAMES.filter(
           (t) => !t.includes("_") || ["read", "bash", "edit", "write", "grep", "find", "ls"].includes(t),
         );
@@ -418,8 +423,63 @@ export class Gateway {
           `browser: ${browser.join(", ")}`,
           `memory: ${memory.join(", ")}`,
           `cron: ${cron.join(", ")}`,
+          `skills: ${skill.join(", ")}`,
           `other: ${ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("session_")).join(", ")}`,
         ].join("\n");
+      }
+
+      case "skills": {
+        const sub = arg.split(/\s+/)[0]?.toLowerCase() || "list";
+        const rest = arg.replace(/^\S+\s*/, "").trim();
+        if (sub === "list" || !arg) {
+          const skills = this.skills.list();
+          if (!skills.length) {
+            return "No skills yet. Try /skills create or ask me to find community skills.";
+          }
+          return [
+            `Skills (${skills.length}):`,
+            ...skills.map((s) => `• ${s.name} [${s.source}] — ${s.description.slice(0, 100)}`),
+            ``,
+            `Use: /skills use <name>`,
+            `Create: /skills create`,
+            `Find: ask me to find a skill, or /skills find <query>`,
+          ].join("\n");
+        }
+        if (sub === "use" || sub === "load" || sub === "run") {
+          const name = rest || arg.replace(/^(use|load|run)\s+/i, "").trim();
+          if (!name) return "Usage: /skills use <name>";
+          const body = this.skills.readBody(name);
+          if (!body) return `Skill not found: ${name}. Try /skills`;
+          // Hand off to agent with skill body loaded
+          msg.text =
+            `Follow the skill "${name}" below to help the user.\n\n` +
+            `--- SKILL.md ---\n${body}\n--- END SKILL ---\n\n` +
+            `If the skill needs user input, ask briefly. Otherwise begin.`;
+          msg.isCommand = false;
+          return null;
+        }
+        if (sub === "create" || sub === "new") {
+          msg.text =
+            "The user wants to create a new skill. Load the create-skill skill " +
+            "(skill_load create-skill) and guide them through creating one with skill_create.";
+          msg.isCommand = false;
+          return null;
+        }
+        if (sub === "find" || sub === "search") {
+          const q = rest || "";
+          msg.text = q
+            ? `Find community skills for: ${q}. Use skill_find or follow find-skills.`
+            : "Help me find useful community skills. Load find-skills and search.";
+          msg.isCommand = false;
+          return null;
+        }
+        if (sub === "delete" || sub === "rm") {
+          const name = rest;
+          if (!name) return "Usage: /skills delete <name>";
+          const r = this.skills.delete(name);
+          return r.ok ? `Deleted ${name}` : `Error: ${r.error}`;
+        }
+        return "Usage: /skills [list|use <name>|create|find <query>|delete <name>]";
       }
 
       case "whoami": {

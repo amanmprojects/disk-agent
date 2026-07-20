@@ -23,12 +23,18 @@ export interface IncomingMessage {
 }
 
 export interface MessageAttachment {
-  type: "photo" | "document" | "voice" | "audio" | "video" | "other";
+  type: "photo" | "document" | "voice" | "audio" | "video" | "sticker" | "other";
   fileId?: string;
   fileName?: string;
   mimeType?: string;
   localPath?: string;
   caption?: string;
+  /** Raw bytes size if known */
+  size?: number;
+  /** Base64 payload for vision models (no data: prefix) */
+  base64?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface OutgoingMessage {
