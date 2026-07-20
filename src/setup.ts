@@ -1,5 +1,8 @@
 /**
- * One-command setup: home layout, pi CLI, extensions (pi-supergrok), auth, config.
+ * One-command interactive setup:
+ *   home layout → config (Telegram, model, …) → Pi CLI →
+ *   Pi extensions (pi-supergrok, pi-agent-browser-native) →
+ *   agent-browser CLI + Chrome → SuperGrok login
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -30,8 +33,18 @@ import { getVersion } from "./version.js";
 
 const require = createRequire(import.meta.url);
 
-/** Default pi packages installed during setup. */
-export const DEFAULT_PI_PACKAGES = ["npm:pi-supergrok"] as const;
+/**
+ * Default Pi packages installed during setup.
+ * - pi-supergrok: SuperGrok / xAI OAuth provider
+ * - pi-agent-browser-native: exposes agent-browser as a native Pi tool
+ */
+export const DEFAULT_PI_PACKAGES = [
+  "npm:pi-supergrok",
+  "npm:pi-agent-browser-native",
+] as const;
+
+/** Docs: https://agent-browser.dev/ */
+export const AGENT_BROWSER_DOCS = "https://agent-browser.dev/";
 
 export interface SetupOptions {
   agentName?: string;
@@ -42,18 +55,18 @@ export interface SetupOptions {
   ownerId?: string;
   /** Skip ensuring pi CLI / packages */
   skipPi?: boolean;
+  /** Skip agent-browser CLI + Chrome download */
+  skipBrowser?: boolean;
   /** Skip SuperGrok login prompt */
   skipLogin?: boolean;
   /** Force SuperGrok OAuth even if already authenticated */
   forceLogin?: boolean;
-  /** Non-interactive: no prompts; login only if --login */
+  /** Non-interactive: no prompts; skip optional login/browser confirm unless forced */
   yes?: boolean;
   /** Explicitly request login (with --yes) */
   login?: boolean;
   /** Extra pi packages to install (npm:… specs) */
   packages?: string[];
-  /** Write telegram token / owner into .env as well as config */
-  writeEnv?: boolean;
   cwd?: string;
 }
 
@@ -66,6 +79,13 @@ export interface SetupResult {
     packages: string[];
     agentDir: string;
   };
+  browser: {
+    cli: string | null;
+    installed: boolean;
+    chromeOk: boolean;
+    detail: string;
+  };
+  telegram: { configured: boolean };
   supergrokExtension: string | null;
   auth: { attempted: boolean; ok: boolean; detail: string };
   version: string;
@@ -91,18 +111,53 @@ function fail(msg: string): void {
   console.log(chalk.red("  ✗ ") + msg);
 }
 
-/** Resolve the pi CLI binary path (PATH, then dependency). */
-export function resolvePiBinary(): string | null {
-  // 1) PATH
-  const which = spawnSync(process.platform === "win32" ? "where" : "which", ["pi"], {
+function isInteractive(): boolean {
+  return Boolean(input.isTTY && output.isTTY);
+}
+
+async function confirm(question: string, defaultYes: boolean): Promise<boolean> {
+  if (!isInteractive()) return defaultYes;
+  const rl = createInterface({ input, output });
+  try {
+    const hint = defaultYes ? "Y/n" : "y/N";
+    const ans = (await rl.question(`${question} [${hint}] `)).trim().toLowerCase();
+    if (!ans) return defaultYes;
+    return ans === "y" || ans === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
+async function ask(
+  question: string,
+  opts?: { defaultValue?: string; secret?: boolean },
+): Promise<string> {
+  if (!isInteractive()) return opts?.defaultValue ?? "";
+  const rl = createInterface({ input, output });
+  try {
+    const suffix = opts?.defaultValue ? chalk.dim(` [${opts.defaultValue}]`) : "";
+    const hint = opts?.secret ? chalk.dim(" (input may be visible)") : "";
+    const ans = (await rl.question(`${question}${suffix}${hint}: `)).trim();
+    return ans || opts?.defaultValue || "";
+  } finally {
+    rl.close();
+  }
+}
+
+function whichCmd(cmd: string): string | null {
+  const r = spawnSync(process.platform === "win32" ? "where" : "which", [cmd], {
     encoding: "utf8",
   });
-  if (which.status === 0) {
-    const line = which.stdout.trim().split("\n")[0]?.trim();
-    if (line && existsSync(line)) return line;
-  }
+  if (r.status !== 0) return null;
+  const line = r.stdout.trim().split("\n")[0]?.trim();
+  return line && existsSync(line) ? line : null;
+}
 
-  // 2) dependency package
+/** Resolve the pi CLI binary path (PATH, then dependency). */
+export function resolvePiBinary(): string | null {
+  const onPath = whichCmd("pi");
+  if (onPath) return onPath;
+
   try {
     const pkgJson = require.resolve("@earendil-works/pi-coding-agent/package.json");
     const cli = join(dirname(pkgJson), "dist", "cli.js");
@@ -111,7 +166,6 @@ export function resolvePiBinary(): string | null {
     /* not found */
   }
 
-  // 3) nested under this package when hoisted differently
   try {
     const here = dirname(require.resolve("disk-agent/package.json"));
     const nested = join(
@@ -130,16 +184,16 @@ export function resolvePiBinary(): string | null {
   return null;
 }
 
-function runNode(script: string, args: string[], opts?: { cwd?: string }): {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  code: number | null;
-} {
+function runNode(
+  script: string,
+  args: string[],
+  opts?: { cwd?: string; timeoutMs?: number },
+): { ok: boolean; stdout: string; stderr: string; code: number | null } {
   const r = spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
     cwd: opts?.cwd,
     env: process.env,
+    timeout: opts?.timeoutMs ?? 300_000,
   });
   return {
     ok: r.status === 0,
@@ -149,13 +203,16 @@ function runNode(script: string, args: string[], opts?: { cwd?: string }): {
   };
 }
 
-function runCmd(cmd: string, args: string[]): {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  code: number | null;
-} {
-  const r = spawnSync(cmd, args, { encoding: "utf8", env: process.env });
+function runCmd(
+  cmd: string,
+  args: string[],
+  opts?: { timeoutMs?: number },
+): { ok: boolean; stdout: string; stderr: string; code: number | null } {
+  const r = spawnSync(cmd, args, {
+    encoding: "utf8",
+    env: process.env,
+    timeout: opts?.timeoutMs ?? 300_000,
+  });
   return {
     ok: r.status === 0,
     stdout: r.stdout ?? "",
@@ -184,7 +241,6 @@ export async function ensurePi(opts?: { skipGlobalInstall?: boolean }): Promise<
   info("pi not on PATH — installing @earendil-works/pi-coding-agent globally…");
   const npm = runCmd("npm", ["install", "-g", "@earendil-works/pi-coding-agent"]);
   if (!npm.ok) {
-    // fall back to local dependency path after npm install of disk-agent
     binary = resolvePiBinary();
     if (binary) {
       return {
@@ -263,15 +319,21 @@ export function ensurePiPackages(
       if (result.ok) {
         installed.push(pkg);
         ok(`installed ${pkg}`);
+        // refresh settings view
+        const refreshed = readPiSettings(agentDir);
+        if (Array.isArray(refreshed.packages)) {
+          current.splice(0, current.length, ...refreshed.packages);
+        } else if (!packageListed(current, pkg)) {
+          current.push(pkg);
+        }
         continue;
       }
 
-      // fallback: append to settings and hope npm has the package via disk-agent deps
       warn(`pi install failed for ${pkg}: ${(result.stderr || result.stdout).trim().slice(0, 200)}`);
     }
 
-    // Manual settings registration + ensure npm package present under pi agent npm tree
-    current.push(pkg);
+    // Manual settings registration + ensure npm package under pi agent npm tree
+    if (!packageListed(current, pkg)) current.push(pkg);
     settings.packages = current;
     writePiSettings(agentDir, settings);
 
@@ -283,7 +345,7 @@ export function ensurePiPackages(
       join(agentDir, "npm"),
       "--omit=dev",
     ]);
-    if (npmInstall.ok || resolveSupergrokExtension()) {
+    if (npmInstall.ok) {
       installed.push(pkg);
       ok(`registered ${pkg} in ${piSettingsPath(agentDir)}`);
     } else {
@@ -295,6 +357,79 @@ export function ensurePiPackages(
   }
 
   return { installed, failed };
+}
+
+/**
+ * Install agent-browser CLI globally and download Chrome (first-time).
+ * Docs: https://agent-browser.dev/
+ */
+export async function ensureAgentBrowser(opts?: {
+  skipChrome?: boolean;
+}): Promise<{
+  cli: string | null;
+  installed: boolean;
+  chromeOk: boolean;
+  detail: string;
+}> {
+  let cli = whichCmd("agent-browser");
+
+  if (!cli) {
+    info("agent-browser not on PATH — installing globally (https://agent-browser.dev/)…");
+    const npm = runCmd("npm", ["install", "-g", "agent-browser"]);
+    if (!npm.ok) {
+      return {
+        cli: null,
+        installed: false,
+        chromeOk: false,
+        detail: `npm install -g agent-browser failed: ${npm.stderr.trim() || npm.stdout.trim() || "unknown"}`,
+      };
+    }
+    cli = whichCmd("agent-browser");
+    if (!cli) {
+      return {
+        cli: null,
+        installed: false,
+        chromeOk: false,
+        detail: "agent-browser installed but binary not found on PATH",
+      };
+    }
+    ok(`agent-browser installed → ${cli}`);
+  } else {
+    ok(`agent-browser found → ${cli}`);
+  }
+
+  if (opts?.skipChrome) {
+    return {
+      cli,
+      installed: true,
+      chromeOk: false,
+      detail: "CLI present; Chrome install skipped",
+    };
+  }
+
+  // Download Chrome / browser backend for first-time use
+  info("Running agent-browser install (download Chrome if needed)…");
+  const install = runCmd(cli, ["install"], { timeoutMs: 600_000 });
+  if (install.ok) {
+    ok("browser backend ready (Chrome)");
+    return {
+      cli,
+      installed: true,
+      chromeOk: true,
+      detail: "CLI + Chrome ready",
+    };
+  }
+
+  // Some versions already have Chrome — treat non-zero with existing CLI as soft fail
+  warn(
+    `agent-browser install: ${(install.stderr || install.stdout).trim().slice(0, 200) || "non-zero exit"}`,
+  );
+  return {
+    cli,
+    installed: true,
+    chromeOk: false,
+    detail: "CLI installed; Chrome download may need: agent-browser install",
+  };
 }
 
 function applyModel(cfg: AppConfig, model: string): void {
@@ -326,17 +461,100 @@ function upsertEnv(envPath: string, entries: Record<string, string | undefined>)
   writeFileSync(envPath, text, "utf8");
 }
 
-async function confirm(question: string, defaultYes: boolean): Promise<boolean> {
-  if (!input.isTTY || !output.isTTY) return defaultYes;
-  const rl = createInterface({ input, output });
-  try {
-    const hint = defaultYes ? "Y/n" : "y/N";
-    const ans = (await rl.question(`${question} [${hint}] `)).trim().toLowerCase();
-    if (!ans) return defaultYes;
-    return ans === "y" || ans === "yes";
-  } finally {
-    rl.close();
+function readEnvValue(envPath: string, key: string): string | undefined {
+  if (!existsSync(envPath)) return undefined;
+  const text = readFileSync(envPath, "utf8");
+  const m = text.match(new RegExp(`^${key}=(.*)$`, "m"));
+  if (!m) return undefined;
+  const v = m[1]!.trim().replace(/^["']|["']$/g, "");
+  return v || undefined;
+}
+
+/**
+ * Interactive prompts for agent name, model, Telegram token, owner, cwd.
+ * Flags / existing env take precedence; --yes skips prompts (keeps defaults / flags).
+ */
+async function collectUserConfig(
+  cfg: AppConfig,
+  paths: DiskAgentPaths,
+  opts: SetupOptions,
+): Promise<{
+  agentName: string;
+  model?: string;
+  telegramToken?: string;
+  ownerId?: string;
+  cwd?: string;
+}> {
+  const existingToken =
+    opts.telegramToken ||
+    cfg.telegram.botToken ||
+    process.env.TELEGRAM_BOT_TOKEN ||
+    readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN");
+  const existingOwner =
+    opts.ownerId ||
+    cfg.telegram.ownerId ||
+    process.env.DISK_AGENT_OWNER_ID ||
+    readEnvValue(paths.envFile, "DISK_AGENT_OWNER_ID");
+  const existingModel =
+    opts.model ||
+    process.env.DISK_AGENT_MODEL ||
+    `${cfg.model.provider}/${cfg.model.id}`;
+  const existingName = opts.agentName || cfg.agentName || "Disk";
+  const existingCwd = opts.cwd || process.env.DISK_AGENT_CWD || cfg.cwd;
+
+  if (opts.yes || !isInteractive()) {
+    return {
+      agentName: existingName,
+      model: opts.model || existingModel,
+      telegramToken: existingToken,
+      ownerId: existingOwner,
+      cwd: opts.cwd || existingCwd,
+    };
   }
+
+  console.log(chalk.bold("\n  Configure your agent"));
+  console.log(
+    chalk.dim("  Press Enter to keep the value in [brackets]. Leave Telegram blank to configure later.\n"),
+  );
+
+  const agentName = await ask("Agent name", { defaultValue: existingName });
+  const model = await ask("Default model (provider/id)", {
+    defaultValue: existingModel,
+  });
+  const cwd = await ask("Coding tools working directory (cwd)", {
+    defaultValue: existingCwd,
+  });
+
+  console.log("");
+  console.log(chalk.dim("  Telegram (optional — from @BotFather: https://t.me/BotFather)"));
+  let telegramToken = existingToken;
+  if (existingToken) {
+    const masked =
+      existingToken.length > 10
+        ? `${existingToken.slice(0, 6)}…${existingToken.slice(-4)}`
+        : "********";
+    info(`existing token detected (${masked})`);
+    if (await confirm("Replace Telegram bot token?", false)) {
+      telegramToken = await ask("TELEGRAM_BOT_TOKEN", { secret: true });
+    }
+  } else {
+    telegramToken = await ask("TELEGRAM_BOT_TOKEN (leave empty to skip)");
+  }
+
+  let ownerId = existingOwner;
+  if (telegramToken) {
+    ownerId = await ask("Your Telegram user id (owner, optional)", {
+      defaultValue: existingOwner,
+    });
+  }
+
+  return {
+    agentName: agentName || "Disk",
+    model: model || existingModel,
+    telegramToken: telegramToken || undefined,
+    ownerId: ownerId || undefined,
+    cwd: cwd || existingCwd,
+  };
 }
 
 /**
@@ -344,46 +562,68 @@ async function confirm(question: string, defaultYes: boolean): Promise<boolean> 
  */
 export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   const version = getVersion();
-  const total = 5;
+  const total = 7;
   console.log(chalk.bold.cyan(`\nDisk Agent v${version} — setup\n`));
+  console.log(
+    chalk.dim(
+      "This wizard installs Pi, SuperGrok, agent-browser, and configures your home + Telegram.\n",
+    ),
+  );
 
   // ── 1. Home layout ──────────────────────────────────────────────────────
   step(1, total, "Initialize standardized home directory");
   const paths = getPaths({ home: opts.dataDir, workspace: opts.workspaceDir });
   ensureLayout(paths);
-  const cfg = bootstrapHome({
+  let cfg = bootstrapHome({
     dataDir: paths.home,
     workspaceDir: paths.workspace,
     agentName: opts.agentName ?? "Disk",
   });
-
-  if (opts.agentName) cfg.agentName = opts.agentName;
-  if (opts.model) applyModel(cfg, opts.model);
-  if (opts.telegramToken) {
-    cfg.telegram.botToken = opts.telegramToken;
-    cfg.telegram.enabled = true;
-  }
-  if (opts.ownerId) cfg.telegram.ownerId = String(opts.ownerId);
-  if (opts.cwd) cfg.cwd = opts.cwd;
-
-  saveConfig(cfg);
   ok(`home:      ${paths.home}`);
   ok(`workspace: ${paths.workspace}`);
   ok(`config:    ${paths.configFile}`);
   ok(`skills:    ${paths.workspaceSkills} (workspace), ${paths.userSkills} (user)`);
-  info("layout:\n" + describeLayout(paths).split("\n").map((l) => "      " + l).join("\n"));
+  info(
+    "layout:\n" +
+      describeLayout(paths)
+        .split("\n")
+        .map((l) => "      " + l)
+        .join("\n"),
+  );
 
-  if (opts.telegramToken || opts.ownerId || opts.model) {
-    upsertEnv(paths.envFile, {
-      TELEGRAM_BOT_TOKEN: opts.telegramToken,
-      DISK_AGENT_OWNER_ID: opts.ownerId,
-      DISK_AGENT_MODEL: opts.model,
-    });
-    if (existsSync(paths.envFile)) ok(`env:       ${paths.envFile}`);
+  // ── 2. Interactive config (Telegram, model, …) ──────────────────────────
+  step(2, total, "Agent & Telegram configuration");
+  const user = await collectUserConfig(cfg, paths, opts);
+
+  cfg.agentName = user.agentName;
+  if (user.model) applyModel(cfg, user.model);
+  if (user.cwd) cfg.cwd = user.cwd;
+  if (user.telegramToken) {
+    cfg.telegram.botToken = user.telegramToken;
+    cfg.telegram.enabled = true;
+  }
+  if (user.ownerId) cfg.telegram.ownerId = String(user.ownerId);
+
+  saveConfig(cfg);
+  upsertEnv(paths.envFile, {
+    TELEGRAM_BOT_TOKEN: user.telegramToken,
+    DISK_AGENT_OWNER_ID: user.ownerId,
+    DISK_AGENT_MODEL: user.model || `${cfg.model.provider}/${cfg.model.id}`,
+    DISK_AGENT_CWD: user.cwd,
+  });
+
+  ok(`agent:     ${cfg.agentName}`);
+  ok(`model:     ${cfg.model.provider}/${cfg.model.id}`);
+  ok(`cwd:       ${cfg.cwd}`);
+  if (user.telegramToken) {
+    ok(`telegram:  enabled (token saved to ${paths.envFile})`);
+    if (user.ownerId) ok(`owner:     ${user.ownerId}`);
+  } else {
+    warn(`telegram:  not configured — add TELEGRAM_BOT_TOKEN to ${paths.envFile}`);
   }
 
-  // ── 2. Pi CLI ───────────────────────────────────────────────────────────
-  step(2, total, "Ensure Pi coding-agent CLI");
+  // ── 3. Pi CLI ───────────────────────────────────────────────────────────
+  step(3, total, "Ensure Pi coding-agent CLI");
   let piBinary: string | null = null;
   let piInstalled = false;
   if (opts.skipPi) {
@@ -401,8 +641,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   const agentDir = resolvePiAgentDir();
   info(`pi agent dir: ${agentDir}`);
 
-  // ── 3. Extensions ───────────────────────────────────────────────────────
-  step(3, total, "Install Pi extensions (pi-supergrok, …)");
+  // ── 4. Pi extensions ────────────────────────────────────────────────────
+  step(4, total, "Install Pi extensions (pi-supergrok, pi-agent-browser-native, …)");
   const wanted = [...new Set([...(opts.packages ?? DEFAULT_PI_PACKAGES)])];
   let packagesInstalled: string[] = [];
   if (opts.skipPi) {
@@ -422,8 +662,45 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   if (ext) ok(`pi-supergrok extension: ${ext}`);
   else warn("pi-supergrok extension not resolved — login may fail until it is installed");
 
-  // ── 4. Auth ─────────────────────────────────────────────────────────────
-  step(4, total, "Authenticate (SuperGrok / xAI)");
+  if (packageListed(packagesInstalled, "npm:pi-agent-browser-native")) {
+    ok("pi-agent-browser-native registered");
+  }
+
+  // ── 5. agent-browser CLI + Chrome ───────────────────────────────────────
+  step(5, total, `Install agent-browser (${AGENT_BROWSER_DOCS})`);
+  let browserResult: SetupResult["browser"] = {
+    cli: whichCmd("agent-browser"),
+    installed: Boolean(whichCmd("agent-browser")),
+    chromeOk: false,
+    detail: "skipped",
+  };
+
+  if (opts.skipBrowser) {
+    warn("skipped agent-browser (--skip-browser)");
+    browserResult.detail = "skipped (--skip-browser)";
+  } else if (opts.yes) {
+    browserResult = await ensureAgentBrowser();
+    if (!browserResult.installed) fail(browserResult.detail);
+    else info(browserResult.detail);
+  } else {
+    const want =
+      browserResult.installed ||
+      (await confirm(
+        "Install agent-browser for full browser automation? (recommended)",
+        true,
+      ));
+    if (want) {
+      browserResult = await ensureAgentBrowser();
+      if (!browserResult.installed) fail(browserResult.detail);
+      else info(browserResult.detail);
+    } else {
+      warn("skipped agent-browser — web_get will use plain fetch only");
+      browserResult.detail = "skipped by user";
+    }
+  }
+
+  // ── 6. Auth ─────────────────────────────────────────────────────────────
+  step(6, total, "Authenticate (SuperGrok / xAI)");
   let authAttempted = false;
   let authOk = false;
   let authDetail = "";
@@ -451,20 +728,26 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       else {
         fail(authDetail);
         info("You can retry later: disk-agent login");
-        info("Or set XAI_API_KEY in ~/.disk-agent/.env");
+        info(`Or set XAI_API_KEY in ${paths.envFile}`);
       }
     } else {
       authDetail = "deferred — run disk-agent login when ready";
       info(authDetail);
-      if (process.env.XAI_API_KEY) {
+      if (process.env.XAI_API_KEY || readEnvValue(paths.envFile, "XAI_API_KEY")) {
         authOk = true;
-        ok("XAI_API_KEY present in environment");
+        ok("XAI_API_KEY present");
       }
     }
   }
 
-  // ── 5. Summary ──────────────────────────────────────────────────────────
-  step(5, total, "Done");
+  // ── 7. Summary ──────────────────────────────────────────────────────────
+  step(7, total, "Done");
+  const telegramConfigured = Boolean(
+    cfg.telegram.botToken ||
+      process.env.TELEGRAM_BOT_TOKEN ||
+      readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN"),
+  );
+
   console.log("");
   console.log(chalk.green.bold("✓ Disk Agent is ready"));
   console.log(`  version:   ${version}`);
@@ -473,22 +756,33 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   console.log(`  model:     ${cfg.model.provider}/${cfg.model.id}`);
   console.log(`  pi:        ${piBinary ?? "(not found)"}`);
   console.log(`  packages:  ${packagesInstalled.join(", ") || "(none)"}`);
-  console.log(`  auth:      ${authOk ? chalk.green("ok") : chalk.yellow(authDetail || "needed")}`);
+  console.log(
+    `  browser:   ${browserResult.cli ?? "(not installed)"}${browserResult.chromeOk ? " + Chrome" : ""}`,
+  );
+  console.log(
+    `  telegram:  ${telegramConfigured ? chalk.green("configured") : chalk.yellow("not set")}`,
+  );
+  console.log(
+    `  auth:      ${authOk ? chalk.green("ok") : chalk.yellow(authDetail || "needed")}`,
+  );
   console.log(`  auth file: ${piAuthPath(agentDir)}`);
   console.log("");
   console.log(chalk.bold("Next steps:"));
-  console.log("  1. disk-agent models          # verify SuperGrok models");
-  console.log("  2. Edit secrets:              " + paths.envFile);
-  console.log("       TELEGRAM_BOT_TOKEN=…     # from @BotFather");
-  console.log("  3. disk-agent gateway         # start Telegram + cron");
-  console.log("  4. DM the bot → disk-agent pair <CODE>");
+  if (!telegramConfigured) {
+    console.log(`  1. Add TELEGRAM_BOT_TOKEN to ${paths.envFile}`);
+    console.log("  2. disk-agent gateway");
+    console.log("  3. DM the bot → disk-agent pair <CODE>");
+  } else {
+    console.log("  1. disk-agent models          # verify SuperGrok models");
+    console.log("  2. disk-agent gateway         # start Telegram + cron");
+    console.log("  3. DM the bot → disk-agent pair <CODE>");
+  }
   console.log("");
   console.log(chalk.dim("CLI-only (no Telegram):  disk-agent chat"));
   console.log(chalk.dim("Re-run setup anytime:    disk-agent setup"));
   console.log(chalk.dim("Diagnostics:             disk-agent doctor"));
   console.log("");
 
-  // Reload config after any env writes
   const finalCfg = loadConfig({ dataDir: paths.home, workspaceDir: paths.workspace });
 
   return {
@@ -500,6 +794,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       packages: packagesInstalled,
       agentDir,
     },
+    browser: browserResult,
+    telegram: { configured: telegramConfigured },
     supergrokExtension: ext,
     auth: { attempted: authAttempted, ok: authOk, detail: authDetail },
     version,
@@ -507,18 +803,20 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
 }
 
 /**
- * Health check for install / paths / auth / extensions.
+ * Health check for install / paths / auth / extensions / browser.
  */
-export async function runDoctor(opts?: { dataDir?: string; workspaceDir?: string }): Promise<number> {
+export async function runDoctor(opts?: {
+  dataDir?: string;
+  workspaceDir?: string;
+}): Promise<number> {
   const version = getVersion();
   const paths = getPaths({ home: opts?.dataDir, workspace: opts?.workspaceDir });
   let exit = 0;
 
   console.log(chalk.bold.cyan(`\nDisk Agent doctor v${version}\n`));
 
-  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+  const checks: Array<{ name: string; ok: boolean; detail: string; soft?: boolean }> = [];
 
-  // Node
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   checks.push({
     name: "Node.js ≥ 20.6",
@@ -526,7 +824,6 @@ export async function runDoctor(opts?: { dataDir?: string; workspaceDir?: string
     detail: process.version,
   });
 
-  // Home layout
   const homeOk = existsSync(paths.home) && existsSync(paths.configFile);
   checks.push({
     name: "Home directory",
@@ -546,7 +843,6 @@ export async function runDoctor(opts?: { dataDir?: string; workspaceDir?: string
     detail: paths.workspaceSkills,
   });
 
-  // Pi
   const pi = resolvePiBinary();
   checks.push({
     name: "Pi CLI",
@@ -556,6 +852,7 @@ export async function runDoctor(opts?: { dataDir?: string; workspaceDir?: string
 
   const agentDir = resolvePiAgentDir();
   const settings = readPiSettings(agentDir);
+
   const hasSg = packageListed(settings.packages, "npm:pi-supergrok");
   checks.push({
     name: "pi-supergrok package",
@@ -572,6 +869,22 @@ export async function runDoctor(opts?: { dataDir?: string; workspaceDir?: string
     detail: ext ?? "missing",
   });
 
+  const hasBrowserPkg = packageListed(settings.packages, "npm:pi-agent-browser-native");
+  checks.push({
+    name: "pi-agent-browser-native",
+    ok: hasBrowserPkg,
+    detail: hasBrowserPkg ? "listed in pi settings" : "not installed — disk-agent setup",
+    soft: true,
+  });
+
+  const ab = whichCmd("agent-browser");
+  checks.push({
+    name: "agent-browser CLI",
+    ok: Boolean(ab),
+    detail: ab ?? `not found — ${AGENT_BROWSER_DOCS}`,
+    soft: true,
+  });
+
   let authOk = false;
   let authDetail = "unknown";
   try {
@@ -582,17 +895,31 @@ export async function runDoctor(opts?: { dataDir?: string; workspaceDir?: string
   }
   checks.push({ name: "Auth", ok: authOk, detail: authDetail });
 
+  const token =
+    process.env.TELEGRAM_BOT_TOKEN ||
+    readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN") ||
+    loadConfig({ dataDir: paths.home }).telegram.botToken;
+  checks.push({
+    name: "Telegram token",
+    ok: Boolean(token),
+    detail: token ? "configured" : `set TELEGRAM_BOT_TOKEN in ${paths.envFile}`,
+    soft: true,
+  });
+
   for (const c of checks) {
-    if (c.ok) console.log(chalk.green("✓") + ` ${c.name.padEnd(28)} ${chalk.dim(c.detail)}`);
-    else {
+    if (c.ok) {
+      console.log(chalk.green("✓") + ` ${c.name.padEnd(28)} ${chalk.dim(c.detail)}`);
+    } else if (c.soft) {
+      console.log(chalk.yellow("○") + ` ${c.name.padEnd(28)} ${c.detail}`);
+    } else {
       console.log(chalk.red("✗") + ` ${c.name.padEnd(28)} ${c.detail}`);
       exit = 1;
     }
   }
 
   console.log("");
-  if (exit === 0) console.log(chalk.green("All checks passed."));
-  else console.log(chalk.yellow("Some checks failed. Run: disk-agent setup"));
+  if (exit === 0) console.log(chalk.green("Required checks passed. ○ = optional / recommended."));
+  else console.log(chalk.yellow("Some required checks failed. Run: disk-agent setup"));
   console.log("");
   return exit;
 }

@@ -6,7 +6,13 @@
 
 - Version **1.0.0** with publish metadata (`files`, `bin`, `exports`, `engines`, `publishConfig`)
 - One-command install: `npm install -g disk-agent`
-- One-command setup: `disk-agent setup` installs Pi (if needed), `pi-supergrok`, seeds the home layout, and offers SuperGrok OAuth login
+- Interactive one-command setup: `disk-agent setup`
+  - Home layout + workspace/skills seed
+  - Prompts for agent name, model, **Telegram bot token**, owner id, cwd
+  - Installs **Pi** CLI if missing
+  - Installs Pi extensions: **pi-supergrok**, **pi-agent-browser-native**
+  - Installs **[agent-browser](https://agent-browser.dev/)** + Chrome (`agent-browser install`)
+  - SuperGrok / X Premium OAuth login
 
 ### Standardized home directory
 

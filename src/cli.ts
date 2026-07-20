@@ -30,20 +30,24 @@ program
 program
   .command("setup")
   .description(
-    "One-command setup: home layout, pi CLI, extensions (pi-supergrok), SuperGrok login, config",
+    "Interactive setup: home, Telegram, Pi, extensions (supergrok + agent-browser), SuperGrok login",
   )
-  .option("--name <name>", "Agent name", "Disk")
+  .option("--name <name>", "Agent name")
   .option("--data-dir <path>", "Override home directory (~/.disk-agent)")
   .option("--workspace <path>", "Override workspace directory")
-  .option("--telegram-token <token>", "Set Telegram bot token")
+  .option("--telegram-token <token>", "Set Telegram bot token (skips prompt)")
   .option("--owner <id>", "Telegram owner user id")
   .option("--model <provider/id>", "Default model, e.g. supergrok/grok-4.5")
   .option("--cwd <path>", "Default coding tools working directory")
-  .option("--skip-pi", "Skip installing pi CLI and extensions")
+  .option("--skip-pi", "Skip installing pi CLI and Pi extensions")
+  .option("--skip-browser", "Skip installing agent-browser CLI + Chrome")
   .option("--skip-login", "Skip SuperGrok OAuth login")
   .option("--login", "Force SuperGrok login (even with --yes)")
   .option("--force-login", "Re-run OAuth even if already authenticated")
-  .option("-y, --yes", "Non-interactive (no prompts; skip login unless --login)")
+  .option(
+    "-y, --yes",
+    "Non-interactive: no prompts; install defaults; skip login unless --login",
+  )
   .option(
     "--package <spec>",
     "Extra pi package to install (repeatable), e.g. npm:pi-supergrok",
@@ -64,6 +68,7 @@ program
         model: opts.model,
         cwd: opts.cwd,
         skipPi: Boolean(opts.skipPi),
+        skipBrowser: Boolean(opts.skipBrowser),
         skipLogin: Boolean(opts.skipLogin),
         forceLogin: Boolean(opts.forceLogin),
         yes: Boolean(opts.yes),

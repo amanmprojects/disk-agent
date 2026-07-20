@@ -25,34 +25,40 @@ You (Telegram / CLI)
 # 1) Install
 npm install -g disk-agent
 
-# 2) Setup (home layout + pi + pi-supergrok + SuperGrok login)
+# 2) Interactive setup (does everything)
 disk-agent setup
 ```
 
-That single `setup` command:
+That single `setup` wizard:
 
 1. Creates the **standardized home directory** (`~/.disk-agent` or `$XDG_DATA_HOME/disk-agent`)
 2. Seeds workspace identity files + built-in skills
-3. Installs the **Pi** CLI if missing (`@earendil-works/pi-coding-agent`)
-4. Installs **pi-supergrok** into Pi (`pi install npm:pi-supergrok`)
-5. Walks you through **SuperGrok / X Premium OAuth** (or skips if you already have tokens / `XAI_API_KEY`)
+3. **Prompts** for agent name, model, Telegram bot token (from [@BotFather](https://t.me/BotFather)), owner id, coding cwd
+4. Installs the **Pi** CLI if missing (`@earendil-works/pi-coding-agent`)
+5. Installs Pi extensions: **pi-supergrok**, **pi-agent-browser-native**
+6. Installs **[agent-browser](https://agent-browser.dev/)** globally and runs `agent-browser install` (Chrome)
+7. Walks you through **SuperGrok / X Premium OAuth** (or skips if tokens / `XAI_API_KEY` already exist)
 
 Non-interactive (CI / scripted):
 
 ```bash
-disk-agent setup --yes --skip-login
+disk-agent setup --yes --skip-login \
+  --telegram-token "123456:ABC..." \
+  --owner "your_telegram_user_id"
 # later:
 disk-agent login
 ```
 
-With options:
+Flags:
 
 ```bash
 disk-agent setup \
   --name Disk \
   --model supergrok/grok-4.5 \
   --telegram-token "123456:ABC..." \
-  --owner "your_telegram_user_id"
+  --owner "your_telegram_user_id" \
+  --skip-browser   # optional: skip agent-browser
+  --skip-login     # optional: skip SuperGrok OAuth
 ```
 
 Verify:

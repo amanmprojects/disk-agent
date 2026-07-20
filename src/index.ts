@@ -23,7 +23,15 @@ export {
   resolvePiAgentDir,
   type DiskAgentPaths,
 } from "./paths.js";
-export { runSetup, runDoctor, ensurePi, resolvePiBinary, DEFAULT_PI_PACKAGES } from "./setup.js";
+export {
+  runSetup,
+  runDoctor,
+  ensurePi,
+  ensureAgentBrowser,
+  resolvePiBinary,
+  DEFAULT_PI_PACKAGES,
+  AGENT_BROWSER_DOCS,
+} from "./setup.js";
 export { loginProvider, hasAnyAuth, authStatus } from "./auth/login.js";
 export { getVersion } from "./version.js";
 export type * from "./types.js";
