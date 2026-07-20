@@ -53,7 +53,9 @@ export class BrowserService {
     this.assertDomainAllowed(url);
     try {
       const res = await fetch(url, {
-        headers: { "User-Agent": "disk-agent/1.0 (+https://github.com/amanmprojects/disk-agent)" },
+        headers: {
+          "User-Agent": "@amanm/disk-agent/1.0 (+https://github.com/amanmprojects/disk-agent)",
+        },
         signal: AbortSignal.timeout(this.cfg.browser.timeoutMs),
       });
       const ct = res.headers.get("content-type") ?? "";

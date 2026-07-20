@@ -23,7 +23,7 @@ You (Telegram / CLI)
 
 ```bash
 # 1) Install
-npm install -g disk-agent
+npm install -g @amanm/disk-agent
 
 # 2) Interactive setup (does everything)
 disk-agent setup
@@ -289,7 +289,7 @@ Built-in (Pi): `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
 ## Library usage
 
 ```ts
-import { bootstrapHome, Gateway, runSetup } from "disk-agent";
+import { bootstrapHome, Gateway, runSetup } from "@amanm/disk-agent";
 
 // Programmatic setup (same as CLI)
 await runSetup({ yes: true, skipLogin: true });

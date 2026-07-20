@@ -5,7 +5,7 @@
 ### Ready for npm
 
 - Version **1.0.0** with publish metadata (`files`, `bin`, `exports`, `engines`, `publishConfig`)
-- One-command install: `npm install -g disk-agent`
+- One-command install: `npm install -g @amanm/disk-agent`
 - Interactive one-command setup: `disk-agent setup`
   - Home layout + workspace/skills seed
   - Prompts for agent name, model, **Telegram bot token**, owner id, cwd

@@ -166,19 +166,21 @@ export function resolvePiBinary(): string | null {
     /* not found */
   }
 
-  try {
-    const here = dirname(require.resolve("disk-agent/package.json"));
-    const nested = join(
-      here,
-      "node_modules",
-      "@earendil-works",
-      "pi-coding-agent",
-      "dist",
-      "cli.js",
-    );
-    if (existsSync(nested)) return nested;
-  } catch {
-    /* local dev name may not resolve */
+  for (const pkgName of ["@amanm/disk-agent", "disk-agent"]) {
+    try {
+      const here = dirname(require.resolve(`${pkgName}/package.json`));
+      const nested = join(
+        here,
+        "node_modules",
+        "@earendil-works",
+        "pi-coding-agent",
+        "dist",
+        "cli.js",
+      );
+      if (existsSync(nested)) return nested;
+    } catch {
+      /* try next name */
+    }
   }
 
   return null;
