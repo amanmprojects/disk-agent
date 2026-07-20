@@ -41,7 +41,22 @@ export interface OutgoingMessage {
   silent?: boolean;
   /** When true, suppress delivery (e.g. HEARTBEAT_OK) */
   suppress?: boolean;
+  /** If set, edit this existing Telegram message instead of sending a new one */
+  editMessageId?: number | string;
 }
+
+/** Live progress events emitted during an agent turn */
+export type LiveProgressEvent =
+  | { kind: "thought"; text: string }
+  | { kind: "tool_start"; id: string; name: string; args: string }
+  | {
+      kind: "tool_end";
+      id: string;
+      name: string;
+      args: string;
+      ok: boolean;
+      detail: string;
+    };
 
 export interface SessionKey {
   channel: ChannelId;
@@ -116,6 +131,10 @@ export interface AgentRunResult {
   toolCalls: number;
   durationMs: number;
   error?: string;
+  /** Model reasoning/thinking captured during the turn (may be empty) */
+  thoughts?: string;
+  /** Human-readable tool activity lines */
+  steps?: string[];
 }
 
 export interface BrowserActionResult {

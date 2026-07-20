@@ -13,7 +13,7 @@ import type { CronScheduler } from "../cron/scheduler.js";
 import type { Logger } from "../logger.js";
 import type { MemoryStore } from "../memory/store.js";
 import { SessionRegistry, makeSessionKey } from "../session/manager.js";
-import type { AgentRunResult, ChannelId, IncomingMessage } from "../types.js";
+import type { AgentRunResult, ChannelId, IncomingMessage, LiveProgressEvent } from "../types.js";
 import { ALL_AGENT_TOOL_NAMES, createDiskTools } from "./tools.js";
 import {
   bootstrapSupergrok,
@@ -82,8 +82,18 @@ export class AgentRuntime {
     message: IncomingMessage,
     opts?: {
       onPartial?: (text: string) => void | Promise<void>;
+      /** Structured live progress (thought done, tool start/end) */
+      onProgress?: (event: LiveProgressEvent) => void | Promise<void>;
+      /** @deprecated use onProgress */
+      onThought?: (text: string) => void | Promise<void>;
+      /** @deprecated use onProgress */
+      onStep?: (line: string) => void | Promise<void>;
       deliverHint?: { channel: ChannelId; peerId: string; chatId?: string };
       ephemeral?: boolean;
+      /** Capture thinking blocks (and stream via onProgress when complete) */
+      captureThoughts?: boolean;
+      /** Capture tool start/end (and stream via onProgress immediately) */
+      captureSteps?: boolean;
     },
   ): Promise<AgentRunResult> {
     await this.ensureReady();
@@ -94,28 +104,157 @@ export class AgentRuntime {
     let toolCalls = 0;
     let finalText = "";
     let error: string | undefined;
+    const completedThoughts: string[] = [];
+    const steps: string[] = [];
+    const captureThoughts = opts?.captureThoughts ?? true;
+    const captureSteps = opts?.captureSteps ?? true;
+
+    // Serialize async callbacks so Telegram messages stay ordered
+    let chain: Promise<void> = Promise.resolve();
+    const enqueue = (fn: () => void | Promise<void>) => {
+      chain = chain
+        .then(() => fn())
+        .catch((err) => {
+          this.log.debug("stream callback error", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    };
+    const emit = (ev: LiveProgressEvent) => {
+      enqueue(async () => {
+        if (opts?.onProgress) await opts.onProgress(ev);
+        // back-compat shims
+        if (ev.kind === "thought" && opts?.onThought) await opts.onThought(ev.text);
+        if (ev.kind === "tool_start" && opts?.onStep) {
+          await opts.onStep(`→ ${ev.name}${ev.args ? ` ${ev.args}` : ""}`);
+        }
+        if (ev.kind === "tool_end" && opts?.onStep) {
+          await opts.onStep(
+            `${ev.ok ? "✓" : "✗"} ${ev.name}${ev.detail ? ` — ${ev.detail}` : ""}`,
+          );
+        }
+      });
+    };
+
+    // Track tool args by id so end events can include them
+    const toolArgsById = new Map<string, string>();
 
     try {
       const active = await this.getOrCreateSession(key, rec.sessionId, message, opts);
       const partials: string[] = [];
+      // Buffer thinking deltas until thinking_end (one message per thought block)
+      const thinkingBuffers = new Map<number, string[]>();
 
       if (active.unsub) active.unsub();
       active.unsub = active.session.subscribe((event) => {
-        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          const delta = event.assistantMessageEvent.delta;
-          partials.push(delta);
-          void opts?.onPartial?.(partials.join(""));
+        if (event.type === "message_update") {
+          const ev = event.assistantMessageEvent as {
+            type?: string;
+            delta?: string;
+            content?: string;
+            contentIndex?: number;
+          };
+
+          if (ev.type === "text_delta" && ev.delta) {
+            partials.push(ev.delta);
+            void opts?.onPartial?.(partials.join(""));
+          }
+
+          if (captureThoughts) {
+            if (ev.type === "thinking_start") {
+              thinkingBuffers.set(ev.contentIndex ?? 0, []);
+            }
+            if (
+              (ev.type === "thinking_delta" || ev.type === "reasoning_delta") &&
+              ev.delta
+            ) {
+              const idx = ev.contentIndex ?? 0;
+              const buf = thinkingBuffers.get(idx) ?? [];
+              buf.push(ev.delta);
+              thinkingBuffers.set(idx, buf);
+            }
+            if (ev.type === "thinking_end" || ev.type === "reasoning_end") {
+              const idx = ev.contentIndex ?? 0;
+              const fromEnd = (ev.content ?? "").trim();
+              const fromBuf = (thinkingBuffers.get(idx) ?? []).join("").trim();
+              thinkingBuffers.delete(idx);
+              const thought = fromEnd || fromBuf;
+              if (thought) {
+                completedThoughts.push(thought);
+                emit({ kind: "thought", text: thought });
+              }
+            }
+          }
         }
-        if (event.type === "tool_execution_start") {
+
+        if (captureSteps && event.type === "tool_execution_start") {
           toolCalls += 1;
-          this.log.debug(`tool start: ${(event as { toolName?: string }).toolName ?? "?"}`);
+          const e = event as {
+            toolName?: string;
+            toolCallId?: string;
+            args?: unknown;
+          };
+          const name = e.toolName ?? "tool";
+          const id = e.toolCallId || `tool_${toolCalls}_${name}`;
+          const args = summarizeArgs(e.args);
+          toolArgsById.set(id, args);
+          const line = `→ ${name}${args ? ` ${args}` : ""}`;
+          steps.push(line);
+          this.log.debug(`tool start: ${name}`);
+          emit({ kind: "tool_start", id, name, args });
+        }
+
+        if (captureSteps && event.type === "tool_execution_end") {
+          const e = event as {
+            toolName?: string;
+            toolCallId?: string;
+            isError?: boolean;
+            error?: string;
+            result?: unknown;
+          };
+          const name = e.toolName ?? "tool";
+          const id = e.toolCallId || [...toolArgsById.keys()].pop() || `tool_end_${name}`;
+          const args = toolArgsById.get(id) ?? "";
+          toolArgsById.delete(id);
+          const ok = !e.isError;
+          const detail = e.isError
+            ? truncate(String(e.error ?? "error"), 800)
+            : truncate(summarizeResult(e.result), 800);
+          const line = `${ok ? "✓" : "✗"} ${name}${detail ? ` — ${detail}` : ""}`;
+          steps.push(line);
+          emit({ kind: "tool_end", id, name, args, ok, detail });
         }
       });
 
       const prompt = this.formatUserPrompt(message);
       await active.session.prompt(prompt);
+      // Flush any pending thought/step deliveries before returning
+      await chain;
 
       finalText = partials.join("").trim() || (await this.extractLastAssistantText(active.session));
+
+      // Fallback: models that only attach thinking on the final message
+      if (captureThoughts && !completedThoughts.length) {
+        const fromMsg = await this.extractLastAssistantThinking(active.session);
+        if (fromMsg) {
+          completedThoughts.push(fromMsg);
+          emit({ kind: "thought", text: fromMsg });
+          await chain;
+        }
+      }
+
+      // Flush leftover thinking buffers that never got thinking_end
+      if (captureThoughts && thinkingBuffers.size) {
+        for (const [, parts] of thinkingBuffers) {
+          const t = parts.join("").trim();
+          if (!t) continue;
+          completedThoughts.push(t);
+          emit({ kind: "thought", text: t });
+        }
+        thinkingBuffers.clear();
+        await chain;
+      }
+
       this.deps.sessions.touch(key, 1);
 
       if (message.channel !== "cron" || !message.text.includes("HEARTBEAT")) {
@@ -131,6 +270,7 @@ export class AgentRuntime {
       error = err instanceof Error ? err.message : String(err);
       this.log.error("agent run failed", { key, error });
       finalText = `Sorry — I hit an error: ${error}`;
+      await chain;
     }
 
     return {
@@ -139,6 +279,8 @@ export class AgentRuntime {
       toolCalls,
       durationMs: Date.now() - started,
       error,
+      thoughts: completedThoughts.join("\n\n").trim() || undefined,
+      steps: steps.length ? steps : undefined,
     };
   }
 
@@ -373,9 +515,10 @@ export class AgentRuntime {
       const messages = (session as unknown as { messages?: unknown[] }).messages;
       if (!Array.isArray(messages)) return "";
       for (let i = messages.length - 1; i >= 0; i--) {
-        const m = messages[i] as { role?: string; content?: unknown };
+        const m = messages[i] as { role?: string; content?: unknown; text?: string };
         if (m?.role === "assistant") {
           if (typeof m.content === "string") return m.content;
+          if (typeof m.text === "string") return m.text;
           if (Array.isArray(m.content)) {
             return m.content
               .filter((c): c is { type: string; text?: string } => !!c && typeof c === "object")
@@ -388,6 +531,81 @@ export class AgentRuntime {
     } catch {
       /* ignore */
     }
+    return "";
+  }
+
+  private async extractLastAssistantThinking(session: AgentSession): Promise<string> {
+    try {
+      const messages = (session as unknown as { messages?: unknown[] }).messages;
+      if (!Array.isArray(messages)) return "";
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i] as {
+          role?: string;
+          content?: unknown;
+          thinking?: string;
+          reasoning?: string;
+        };
+        if (m?.role !== "assistant") continue;
+        if (typeof m.thinking === "string" && m.thinking.trim()) return m.thinking.trim();
+        if (typeof m.reasoning === "string" && m.reasoning.trim()) return m.reasoning.trim();
+        if (Array.isArray(m.content)) {
+          const parts = m.content
+            .filter(
+              (c): c is { type: string; thinking?: string; text?: string } =>
+                !!c && typeof c === "object",
+            )
+            .filter((c) => c.type === "thinking" || c.type === "reasoning")
+            .map((c) => c.thinking || c.text || "")
+            .filter(Boolean);
+          if (parts.length) return parts.join("\n").trim();
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return "";
+  }
+}
+
+function summarizeArgs(args: unknown): string {
+  if (args == null) return "";
+  try {
+    if (typeof args === "string") return truncate(args, 120);
+    if (typeof args === "object") {
+      const o = args as Record<string, unknown>;
+      // Prefer common short fields
+      for (const k of ["command", "path", "url", "query", "target", "name", "id", "note", "content"]) {
+        if (typeof o[k] === "string" && o[k]) {
+          return `${k}=${truncate(String(o[k]), 80)}`;
+        }
+      }
+      return truncate(JSON.stringify(args), 120);
+    }
+    return truncate(String(args), 120);
+  } catch {
+    return "";
+  }
+}
+
+function summarizeResult(result: unknown): string {
+  if (result == null) return "";
+  try {
+    if (typeof result === "string") return result;
+    if (typeof result === "object" && result && "content" in (result as object)) {
+      const content = (result as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        return content
+          .map((c) =>
+            c && typeof c === "object" && "text" in c
+              ? String((c as { text?: string }).text ?? "")
+              : "",
+          )
+          .filter(Boolean)
+          .join(" ");
+      }
+    }
+    return JSON.stringify(result);
+  } catch {
     return "";
   }
 }

@@ -88,6 +88,10 @@ Type / for command suggestions, or /help for the full list.`,
     this.bot.command("cron", route("cron"));
     this.bot.command("browser", route("browser"));
     this.bot.command("tools", route("tools"));
+    this.bot.command("thoughts", route("thoughts"));
+    this.bot.command("steps", route("steps"));
+    this.bot.command("verbose", route("verbose"));
+    this.bot.command("prefs", route("prefs"));
     this.bot.command("whoami", route("whoami"));
     this.bot.command("pair", route("pair"));
     this.bot.command("stop", route("stop"));
@@ -119,6 +123,15 @@ Type / for command suggestions, or /help for the full list.`,
           "cron",
           "browser",
           "tools",
+          "thoughts",
+          "reasoning",
+          "think",
+          "steps",
+          "trace",
+          "verbose",
+          "debug",
+          "prefs",
+          "display",
           "whoami",
           "pair",
           "stop",
@@ -182,25 +195,63 @@ Type / for command suggestions, or /help for the full list.`,
     }
   }
 
-  async send(out: OutgoingMessage): Promise<void> {
-    if (!this.bot || out.suppress) return;
+  /**
+   * Send a message. Returns the first Telegram message_id (useful for later edits).
+   * When out.editMessageId is set, edits that message instead (single chunk only).
+   */
+  async send(out: OutgoingMessage): Promise<number | undefined> {
+    if (!this.bot || out.suppress) return undefined;
     const chatId = out.chatId ?? out.peerId.replace(/^telegram:/, "");
-    if (!chatId) return;
+    if (!chatId) return undefined;
+
+    // Edit path — one message only
+    if (out.editMessageId != null) {
+      const messageId = Number(out.editMessageId);
+      try {
+        await this.bot.api.editMessageText(chatId, messageId, out.text || "…", {
+          parse_mode: out.parseMode,
+        });
+        return messageId;
+      } catch (err) {
+        // Fallback: plain edit, then give up (don't spam a new message for edits)
+        try {
+          await this.bot.api.editMessageText(chatId, messageId, out.text || "…");
+          return messageId;
+        } catch (err2) {
+          this.log.warn("edit failed", {
+            error: err2 instanceof Error ? err2.message : String(err2),
+            prev: err instanceof Error ? err.message : String(err),
+          });
+          return messageId;
+        }
+      }
+    }
+
     const chunks = chunkText(out.text || "…", this.cfg.telegram.maxMessageChars);
+    let firstId: number | undefined;
     for (const chunk of chunks) {
       try {
-        await this.bot.api.sendMessage(chatId, chunk, {
+        const msg = await this.bot.api.sendMessage(chatId, chunk, {
           parse_mode: out.parseMode,
           disable_notification: out.silent,
         });
+        if (firstId == null) firstId = msg.message_id;
       } catch (err) {
-        // Retry without parse_mode if markdown fails
+        // Retry without parse_mode if HTML/markdown fails
         this.log.warn("send failed, retrying plain", { err: String(err) });
-        await this.bot.api.sendMessage(chatId, chunk, {
-          disable_notification: out.silent,
-        });
+        try {
+          const msg = await this.bot.api.sendMessage(chatId, stripTags(chunk), {
+            disable_notification: out.silent,
+          });
+          if (firstId == null) firstId = msg.message_id;
+        } catch (err2) {
+          this.log.error("send failed plain", {
+            error: err2 instanceof Error ? err2.message : String(err2),
+          });
+        }
       }
     }
+    return firstId;
   }
 
   /** Send typing action */
@@ -314,4 +365,15 @@ Type / for command suggestions, or /help for the full list.`,
     msg.isCommand = true;
     if (this.handler) await this.handler(msg);
   }
+}
+
+function stripTags(s: string): string {
+  return s
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"');
 }

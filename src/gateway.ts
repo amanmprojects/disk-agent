@@ -6,12 +6,26 @@ import { TelegramChannel } from "./channels/telegram.js";
 import { CronScheduler, cronJobToIncoming, describeSchedule } from "./cron/scheduler.js";
 import { Logger, defaultLogPath } from "./logger.js";
 import { MemoryStore } from "./memory/store.js";
-import { SessionRegistry } from "./session/manager.js";
-import type { CronJob, IncomingMessage, OutgoingMessage } from "./types.js";
+import { SessionRegistry, makeSessionKey } from "./session/manager.js";
+import type {
+  AgentRunResult,
+  CronJob,
+  IncomingMessage,
+  LiveProgressEvent,
+  OutgoingMessage,
+} from "./types.js";
 import { KeyedQueue } from "./utils.js";
-import { makeSessionKey } from "./session/manager.js";
 import { helpText } from "./channels/commands.js";
 import { ALL_AGENT_TOOL_NAMES } from "./agent/tools.js";
+import { parseOnOff, PrefsStore, type PeerPrefs } from "./prefs.js";
+import {
+  formatCronHtml,
+  formatFinalHtml,
+  formatThoughtHtml,
+  formatToolDoneHtml,
+  formatToolRunningHtml,
+  markdownToTelegramHtml,
+} from "./format/telegram.js";
 
 /**
  * Gateway control plane — OpenClaw-style single process that owns:
@@ -26,6 +40,7 @@ export class Gateway {
   readonly browser: BrowserService;
   readonly telegram: TelegramChannel;
   readonly agent: AgentRuntime;
+  readonly prefs: PrefsStore;
   private queue = new KeyedQueue();
   private started = false;
 
@@ -37,6 +52,7 @@ export class Gateway {
     this.cron = new CronScheduler(cfg, this.log);
     this.browser = new BrowserService(cfg, this.log);
     this.telegram = new TelegramChannel(cfg, this.log);
+    this.prefs = new PrefsStore(cfg);
     this.agent = new AgentRuntime({
       cfg,
       log: this.log,
@@ -84,11 +100,13 @@ export class Gateway {
       if (msg.text.startsWith("/")) {
         const handled = await this.handleCommand(msg);
         if (handled !== null) {
+          const isTg = msg.channel === "telegram";
           await this.deliver({
             channel: msg.channel,
             peerId: msg.peerId,
             chatId: msg.chatId,
-            text: handled,
+            text: isTg ? markdownToTelegramHtml(handled) : handled,
+            parseMode: isTg ? "HTML" : undefined,
           });
           return handled;
         }
@@ -98,28 +116,115 @@ export class Gateway {
         void this.telegram.typing(msg.chatId);
       }
 
+      const peerKey = makeSessionKey(msg.channel, msg.peerId);
+      const prefs = this.prefs.get(peerKey);
+
+      // Live stream progress:
+      //  - thoughts → grey blockquote message when each thought finishes
+      //  - tools → one message per tool, edited from "running…" → result
+      const toolMsgIds = new Map<string, number>();
+      let deliverChain: Promise<void> = Promise.resolve();
+
+      const queueLive = (fn: () => Promise<void>) => {
+        deliverChain = deliverChain.then(fn).catch((err) => {
+          this.log.debug("live deliver failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        if (msg.channel === "telegram" && msg.chatId) {
+          void this.telegram.typing(msg.chatId);
+        }
+        return deliverChain;
+      };
+
+      const onProgress =
+        prefs.showThoughts || prefs.showSteps
+          ? async (ev: LiveProgressEvent) => {
+              await queueLive(async () => {
+                if (ev.kind === "thought") {
+                  if (!prefs.showThoughts) return;
+                  await this.deliver({
+                    channel: msg.channel,
+                    peerId: msg.peerId,
+                    chatId: msg.chatId,
+                    text: formatThoughtHtml(ev.text),
+                    parseMode: msg.channel === "telegram" ? "HTML" : undefined,
+                    silent: true,
+                  });
+                  return;
+                }
+
+                if (!prefs.showSteps) return;
+
+                if (ev.kind === "tool_start") {
+                  const html = formatToolRunningHtml(ev.name, ev.args);
+                  const id = await this.deliver({
+                    channel: msg.channel,
+                    peerId: msg.peerId,
+                    chatId: msg.chatId,
+                    text: html,
+                    parseMode: msg.channel === "telegram" ? "HTML" : undefined,
+                    silent: true,
+                  });
+                  if (typeof id === "number") toolMsgIds.set(ev.id, id);
+                  return;
+                }
+
+                if (ev.kind === "tool_end") {
+                  const html = formatToolDoneHtml(ev.name, ev.args, ev.ok, ev.detail);
+                  const existing = toolMsgIds.get(ev.id);
+                  await this.deliver({
+                    channel: msg.channel,
+                    peerId: msg.peerId,
+                    chatId: msg.chatId,
+                    text: html,
+                    parseMode: msg.channel === "telegram" ? "HTML" : undefined,
+                    silent: true,
+                    editMessageId: existing,
+                  });
+                  toolMsgIds.delete(ev.id);
+                }
+              });
+            }
+          : undefined;
+
       const result = await this.agent.run(msg, {
         deliverHint:
           msg.channel === "telegram"
             ? { channel: "telegram", peerId: msg.peerId, chatId: msg.chatId }
             : undefined,
-        onPartial: undefined,
+        captureThoughts: prefs.showThoughts,
+        captureSteps: prefs.showSteps,
+        onProgress,
       });
 
-      const text = result.text?.trim() || "(no response)";
+      // Wait for any in-flight live messages before the final answer
+      await deliverChain;
 
+      const bare = result.text?.trim() || "(no response)";
       // Suppress heartbeat OK
-      const suppress = text === "HEARTBEAT_OK" || text.startsWith("HEARTBEAT_OK\n");
+      const suppress = bare === "HEARTBEAT_OK" || bare.startsWith("HEARTBEAT_OK\n");
+
+      const text =
+        msg.channel === "telegram"
+          ? formatFinalHtml(
+              bare,
+              prefs.showSteps || prefs.showThoughts
+                ? { durationMs: result.durationMs, toolCalls: result.toolCalls }
+                : undefined,
+            )
+          : composeFinalReply(bare, result, prefs);
 
       await this.deliver({
         channel: msg.channel,
         peerId: msg.peerId,
         chatId: msg.chatId,
         text,
+        parseMode: msg.channel === "telegram" ? "HTML" : undefined,
         suppress,
       });
 
-      return suppress ? "" : text;
+      return suppress ? "" : bare;
     });
   }
 
@@ -137,27 +242,36 @@ export class Gateway {
       return;
     }
 
+    const isTg = job.deliver.channel === "telegram";
     await this.deliver({
       channel: job.deliver.channel,
       peerId: job.deliver.peerId,
       chatId: job.deliver.chatId,
-      text: `⏰ *${job.name}*\n\n${text}`,
-      parseMode: "Markdown",
+      text: isTg ? formatCronHtml(job.name, text) : `⏰ ${job.name}\n\n${text}`,
+      parseMode: isTg ? "HTML" : undefined,
     });
   }
 
-  private async deliver(out: OutgoingMessage): Promise<void> {
-    if (out.suppress || !out.text) return;
+  private async deliver(out: OutgoingMessage): Promise<number | undefined> {
+    if (out.suppress || !out.text) return undefined;
     if (out.channel === "telegram") {
-      await this.telegram.send(out);
-      return;
+      return this.telegram.send(out);
     }
     if (out.channel === "cli") {
-      console.log(out.text);
-      return;
+      // CLI: strip simple tags for readability when HTML is used
+      const plain = out.text
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/p>/gi, "\n")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&");
+      console.log(plain);
+      return undefined;
     }
     // system/cron without telegram — log only
     this.log.info(`[deliver:${out.channel}] ${out.text.slice(0, 200)}`);
+    return undefined;
   }
 
   private async handleCommand(msg: IncomingMessage): Promise<string | null> {
@@ -334,6 +448,56 @@ export class Gateway {
       case "stop":
         return "OK — idle. Send another message when you want to continue.";
 
+      case "thoughts":
+      case "reasoning":
+      case "think": {
+        const peerKey = makeSessionKey(msg.channel, msg.peerId);
+        const cur = this.prefs.get(peerKey);
+        const v = parseOnOff(arg);
+        if (v === null && !arg) {
+          return `Thoughts (model reasoning): ${cur.showThoughts ? "ON" : "OFF"}\nUsage: /thoughts on|off`;
+        }
+        if (v === null) return "Usage: /thoughts on|off";
+        const next = this.prefs.set(peerKey, { showThoughts: v });
+        return `Thoughts ${next.showThoughts ? "ON" : "OFF"} — I'll ${next.showThoughts ? "send each thought as its own message when it finishes" : "hide model reasoning"}.`;
+      }
+
+      case "steps":
+      case "tools_trace":
+      case "trace": {
+        const peerKey = makeSessionKey(msg.channel, msg.peerId);
+        const cur = this.prefs.get(peerKey);
+        const v = parseOnOff(arg);
+        if (v === null && !arg) {
+          return `Steps (tool activity): ${cur.showSteps ? "ON" : "OFF"}\nUsage: /steps on|off`;
+        }
+        if (v === null) return "Usage: /steps on|off";
+        const next = this.prefs.set(peerKey, { showSteps: v });
+        return `Steps ${next.showSteps ? "ON" : "OFF"} — I'll ${next.showSteps ? "send each tool call as its own message as it happens" : "hide tool activity"}.`;
+      }
+
+      case "verbose":
+      case "debug": {
+        const peerKey = makeSessionKey(msg.channel, msg.peerId);
+        const cur = this.prefs.get(peerKey);
+        const v = parseOnOff(arg);
+        if (v === null && !arg) {
+          return [
+            "Verbose display prefs:",
+            this.prefs.format(cur),
+          ].join("\n");
+        }
+        if (v === null) return "Usage: /verbose on|off\n(turns both thoughts + steps together)";
+        const next = this.prefs.set(peerKey, { showThoughts: v, showSteps: v });
+        return `Verbose ${v ? "ON" : "OFF"}\n${this.prefs.format(next)}`;
+      }
+
+      case "prefs":
+      case "display": {
+        const peerKey = makeSessionKey(msg.channel, msg.peerId);
+        return this.prefs.format(this.prefs.get(peerKey));
+      }
+
       default:
         // Let the agent handle unknown /commands
         return null;
@@ -348,4 +512,18 @@ export class Gateway {
     saveConfig(this.cfg);
     return `Paired user ${result.userId}. They can chat with the bot now.`;
   }
+}
+
+/** Final answer for non-Telegram channels. */
+function composeFinalReply(
+  answer: string,
+  result: AgentRunResult,
+  prefs: PeerPrefs,
+): string {
+  if (!(prefs.showSteps || prefs.showThoughts)) return answer;
+  const meta = [`${result.durationMs}ms`];
+  if (result.toolCalls) meta.push(`${result.toolCalls} tools`);
+  return `${answer}
+
+(${meta.join(" · ")})`;
 }
