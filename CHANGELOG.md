@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+### CLI
+
+- `disk-agent update [version]` — install the latest (or pinned) `@amanm/disk-agent` from npm and restart the detached gateway
+  - `--check` reports current vs registry without installing
+  - `--no-restart` updates the package only
+
 ## 1.1.0
 
 ### Telegram reply formatting

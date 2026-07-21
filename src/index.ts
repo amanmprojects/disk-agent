@@ -50,5 +50,14 @@ export {
   getDaemonStatus,
   writeRuntimePid,
 } from "./daemon.js";
+export {
+  runUpdate,
+  packageSpec,
+  PACKAGE_NAME,
+  fetchRegistryVersion,
+  readInstalledVersion,
+  type UpdateOptions,
+  type UpdateResult,
+} from "./update.js";
 export { normalizeThinkingLevel, type ThinkingEffort } from "./agent/runtime.js";
 export type * from "./types.js";

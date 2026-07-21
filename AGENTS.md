@@ -74,6 +74,7 @@ npm test
 
 disk-agent setup       # first-run: home, Telegram, Tavily key, Pi, extensions
 disk-agent doctor      # health check
+disk-agent update      # npm self-update + restart gateway
 disk-agent gateway start|stop|restart|status
 disk-agent chat        # local REPL
 ```

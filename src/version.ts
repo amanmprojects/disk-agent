@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
 /** Fallback when package.json cannot be resolved (e.g. unusual packaging). */
-const FALLBACK_VERSION = "1.1.0";
+const FALLBACK_VERSION = "1.2.0";
 
 /**
  * Read the published package version from package.json next to dist/.

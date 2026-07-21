@@ -87,6 +87,12 @@ disk-agent gateway status
 disk-agent gateway stop
 disk-agent gateway restart
 
+# Update to the latest published version and restart the gateway
+disk-agent update
+disk-agent update --check          # report only
+disk-agent update 1.2.0            # pin a version
+disk-agent update --no-restart     # package only
+
 # Foreground (dev / Ctrl+C to stop)
 disk-agent gateway
 # or
@@ -201,6 +207,7 @@ Built-ins seeded on setup: **create-skill**, **find-skills**, **remember**.
 disk-agent setup          Full bootstrap (home + pi + extensions + login)
 disk-agent login [prov]   SuperGrok / provider OAuth
 disk-agent doctor         Health check
+disk-agent update         Update to latest npm version and restart the gateway
 disk-agent paths          Print directory layout
 disk-agent gateway        Foreground gateway (Telegram + cron)
 disk-agent gateway start  Detached OS process (VPS-friendly)

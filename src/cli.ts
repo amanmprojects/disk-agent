@@ -24,6 +24,7 @@ import {
   stopDaemon,
   writeRuntimePid,
 } from "./daemon.js";
+import { runUpdate } from "./update.js";
 
 const VERSION = getVersion();
 
@@ -128,6 +129,54 @@ program
       workspaceDir: opts.workspace,
     });
     process.exitCode = code;
+  });
+
+program
+  .command("update")
+  .description(
+    "Update @amanm/disk-agent to the latest (or given) version and restart the gateway",
+  )
+  .argument(
+    "[version]",
+    "Version or dist-tag (default: latest). Examples: latest, 1.2.0, v1.2.0",
+  )
+  .option("--check", "Only check for a newer version; do not install or restart")
+  .option("--no-restart", "Update the package but do not stop/start the gateway")
+  .option("--data-dir <path>", "Override home directory")
+  .option("--workspace <path>", "Override workspace directory")
+  .option("--cwd <path>", "Coding tools working directory for the restarted gateway")
+  .action((version: string | undefined, opts) => {
+    try {
+      const result = runUpdate({
+        version,
+        check: Boolean(opts.check),
+        noRestart: opts.restart === false,
+        dataDir: opts.dataDir,
+        workspaceDir: opts.workspace,
+        cwd: opts.cwd,
+      });
+      if (result.ok) {
+        console.log(chalk.green(result.message));
+        if (result.latestVersion && result.previousVersion !== result.newVersion) {
+          console.log(`  was:     v${result.previousVersion}`);
+          console.log(`  now:     v${result.newVersion ?? result.latestVersion}`);
+        } else if (result.latestVersion && opts.check) {
+          console.log(`  current: v${result.previousVersion}`);
+          console.log(`  latest:  v${result.latestVersion}`);
+        }
+        if (result.gatewayMessage) {
+          const style = result.restarted ? chalk.green : chalk.dim;
+          console.log(style(result.gatewayMessage));
+        }
+      } else {
+        console.error(chalk.red(result.message));
+        if (result.gatewayMessage) console.error(chalk.yellow(result.gatewayMessage));
+        process.exitCode = 1;
+      }
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exitCode = 1;
+    }
   });
 
 program
