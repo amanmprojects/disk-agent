@@ -1,62 +1,15 @@
 import { escapeHtml } from "../utils.js";
 
 /**
- * Light Markdown → Telegram HTML.
- * Intentionally conservative so broken MD never breaks delivery.
+ * Telegram delivery helpers.
+ *
+ * Agent/user text is HTML-escaped only (no Markdown conversion). Telegram HTML
+ * is used solely for *our* chrome: tool lines, thoughts, meta footers.
  */
-export function markdownToTelegramHtml(input: string): string {
-  let s = input.replace(/\r\n/g, "\n");
 
-  // Extract fenced code blocks first
-  const fences: string[] = [];
-  s = s.replace(/```(?:[\w+-]*)\n?([\s\S]*?)```/g, (_m, code: string) => {
-    const i = fences.length;
-    fences.push(`<pre><code>${escapeHtml(code.replace(/\n$/, ""))}</code></pre>`);
-    return `\u0000FENCE${i}\u0000`;
-  });
-
-  // Inline code
-  const inlines: string[] = [];
-  s = s.replace(/`([^`\n]+)`/g, (_m, code: string) => {
-    const i = inlines.length;
-    inlines.push(`<code>${escapeHtml(code)}</code>`);
-    return `\u0000INLINE${i}\u0000`;
-  });
-
-  // Escape remaining text, then re-apply simple markers on plain text segments
-  // Split on placeholders so we don't double-escape them
-  const parts = s.split(/(\u0000(?:FENCE|INLINE)\d+\u0000)/);
-  const out = parts
-    .map((part) => {
-      if (part.startsWith("\u0000FENCE") || part.startsWith("\u0000INLINE")) return part;
-      return formatPlainMarkdown(escapeHtml(part));
-    })
-    .join("");
-
-  return out
-    .replace(/\u0000FENCE(\d+)\u0000/g, (_m, i) => fences[Number(i)] ?? "")
-    .replace(/\u0000INLINE(\d+)\u0000/g, (_m, i) => inlines[Number(i)] ?? "");
-}
-
-function formatPlainMarkdown(escaped: string): string {
-  let s = escaped;
-  // Headings → bold line
-  s = s.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
-  // Bold **x** or __x__
-  s = s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-  s = s.replace(/__(.+?)__/g, "<b>$1</b>");
-  // Italic *x* or _x_ (avoid matching inside words for _)
-  s = s.replace(/(?<!\w)\*(?!\s)(.+?)(?<!\s)\*(?!\w)/g, "<i>$1</i>");
-  s = s.replace(/(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)/g, "<i>$1</i>");
-  // Strikethrough ~~x~~
-  s = s.replace(/~~(.+?)~~/g, "<s>$1</s>");
-  // Links [text](url)
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
-  // Blockquotes
-  s = s.replace(/^(?:&gt;|>)\s?(.+)$/gm, "<blockquote>$1</blockquote>");
-  // Collapse adjacent blockquotes into one where possible
-  s = s.replace(/<\/blockquote>\n<blockquote>/g, "\n");
-  return s;
+/** Escape agent/command text for Telegram HTML parse mode — preserve content as-is. */
+export function plainToTelegramHtml(input: string): string {
+  return escapeHtml(input.replace(/\r\n/g, "\n"));
 }
 
 /** Grey-ish thought bubble via blockquote (Telegram renders these muted). */
@@ -115,7 +68,7 @@ export function formatFinalHtml(
   answer: string,
   meta?: { durationMs?: number; toolCalls?: number },
 ): string {
-  let html = markdownToTelegramHtml(answer.trim() || "(no response)");
+  let html = plainToTelegramHtml(answer.trim() || "(no response)");
   if (meta && (meta.durationMs != null || meta.toolCalls)) {
     const bits: string[] = [];
     if (meta.durationMs != null) bits.push(`${meta.durationMs}ms`);
@@ -126,7 +79,7 @@ export function formatFinalHtml(
 }
 
 export function formatCronHtml(name: string, body: string): string {
-  return `<b>⏰ ${escapeHtml(name)}</b>\n\n${markdownToTelegramHtml(body)}`;
+  return `<b>⏰ ${escapeHtml(name)}</b>\n\n${plainToTelegramHtml(body)}`;
 }
 
 function clip(s: string, n: number): string {

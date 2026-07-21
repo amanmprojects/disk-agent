@@ -39,7 +39,7 @@ import {
   formatToolDoneHtml,
   formatToolNameHtml,
   formatToolRunningHtml,
-  markdownToTelegramHtml,
+  plainToTelegramHtml,
 } from "./format/telegram.js";
 
 /**
@@ -123,7 +123,7 @@ export class Gateway {
             channel: msg.channel,
             peerId: msg.peerId,
             chatId: msg.chatId,
-            text: isTg ? markdownToTelegramHtml(handled) : handled,
+            text: isTg ? plainToTelegramHtml(handled) : handled,
             parseMode: isTg ? "HTML" : undefined,
           });
           return handled;

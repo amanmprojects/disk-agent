@@ -161,6 +161,9 @@ export class AgentRuntime {
     try {
       const active = await this.getOrCreateSession(key, rec.sessionId, message, opts);
       const partials: string[] = [];
+      // After tool calls, the next text segment often starts mid-sentence without a
+      // leading newline — inject a paragraph break so we don't get "now.Done".
+      let needsTextBoundary = false;
       // Buffer thinking deltas until thinking_end (one message per thought block)
       const thinkingBuffers = new Map<number, string[]>();
 
@@ -175,6 +178,13 @@ export class AgentRuntime {
           };
 
           if (ev.type === "text_delta" && ev.delta) {
+            if (needsTextBoundary) {
+              const soFar = partials.join("");
+              if (soFar && !/\s$/.test(soFar) && !/^\s/.test(ev.delta)) {
+                partials.push("\n\n");
+              }
+              needsTextBoundary = false;
+            }
             partials.push(ev.delta);
             void opts?.onPartial?.(partials.join(""));
           }
@@ -218,21 +228,26 @@ export class AgentRuntime {
           }
         }
 
-        if (captureSteps && event.type === "tool_execution_start") {
-          toolCalls += 1;
-          const e = event as {
-            toolName?: string;
-            toolCallId?: string;
-            args?: unknown;
-          };
-          const name = e.toolName ?? "tool";
-          const id = e.toolCallId || `tool_${toolCalls}_${name}`;
-          const args = summarizeArgs(e.args);
-          toolArgsById.set(id, args);
-          const line = `→ ${name}${args ? ` ${args}` : ""}`;
-          steps.push(line);
-          this.log.debug(`tool start: ${name}`);
-          emit({ kind: "tool_start", id, name, args });
+        if (event.type === "tool_execution_start") {
+          if (partials.length) needsTextBoundary = true;
+          if (captureSteps) {
+            toolCalls += 1;
+            const e = event as {
+              toolName?: string;
+              toolCallId?: string;
+              args?: unknown;
+            };
+            const name = e.toolName ?? "tool";
+            const id = e.toolCallId || `tool_${toolCalls}_${name}`;
+            const args = summarizeArgs(e.args);
+            toolArgsById.set(id, args);
+            const line = `→ ${name}${args ? ` ${args}` : ""}`;
+            steps.push(line);
+            this.log.debug(`tool start: ${name}`);
+            emit({ kind: "tool_start", id, name, args });
+          } else {
+            toolCalls += 1;
+          }
         }
 
         if (captureSteps && event.type === "tool_execution_end") {
@@ -784,11 +799,12 @@ export class AgentRuntime {
           if (typeof m.content === "string") return m.content;
           if (typeof m.text === "string") return m.text;
           if (Array.isArray(m.content)) {
-            return m.content
-              .filter((c): c is { type: string; text?: string } => !!c && typeof c === "object")
-              .filter((c) => c.type === "text" && c.text)
-              .map((c) => c.text!)
-              .join("");
+            return joinAssistantTextParts(
+              m.content
+                .filter((c): c is { type: string; text?: string } => !!c && typeof c === "object")
+                .filter((c) => c.type === "text" && c.text)
+                .map((c) => c.text!),
+            );
           }
         }
       }
@@ -854,6 +870,24 @@ export class AgentRuntime {
     }
     return "";
   }
+}
+
+/** Join distinct text blocks without gluing sentences ("now." + "Done" → "now.\n\nDone"). */
+export function joinAssistantTextParts(parts: string[]): string {
+  let out = "";
+  for (const part of parts) {
+    if (!part) continue;
+    if (!out) {
+      out = part;
+      continue;
+    }
+    if (/\s$/.test(out) || /^\s/.test(part)) {
+      out += part;
+    } else {
+      out += `\n\n${part}`;
+    }
+  }
+  return out;
 }
 
 function summarizeArgs(args: unknown): string {
