@@ -77,6 +77,19 @@ export interface SessionKey {
   peerId: string;
 }
 
+/** Archived transcript for a peer (created on /new / reset). */
+export interface SessionHistoryEntry {
+  sessionId: string;
+  /** Absolute path to Pi session .jsonl when known */
+  sessionFile?: string;
+  title?: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  /** When this transcript was archived (left the active slot) */
+  archivedAt: string;
+}
+
 export interface SessionRecord {
   key: string;
   channel: ChannelId;
@@ -89,6 +102,25 @@ export interface SessionRecord {
   updatedAt: string;
   messageCount: number;
   metadata?: Record<string, unknown>;
+  /** Previous transcripts for this peer (most recent first) */
+  history?: SessionHistoryEntry[];
+}
+
+/** Resolved match when looking up a session id / path for resume. */
+export interface SessionLookup {
+  key: string;
+  channel: ChannelId;
+  peerId: string;
+  sessionId: string;
+  sessionFile?: string;
+  title?: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  /** True when this is the peer's current active session */
+  active: boolean;
+  /** Present when found in a peer's history archive */
+  archivedAt?: string;
 }
 
 export type CronSchedule =

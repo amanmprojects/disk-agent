@@ -404,7 +404,55 @@ export class Gateway {
 
       case "new": {
         const id = await this.agent.resetSession(msg.channel, msg.peerId);
-        return `New session started (${id}).`;
+        return `New session started (${id}). Previous transcript archived — /sessions to list, /resume <id> to continue it.`;
+      }
+
+      case "sessions":
+      case "session":
+      case "history": {
+        const key = makeSessionKey(msg.channel, msg.peerId);
+        // Ensure peer exists in index even if they never completed a turn
+        this.sessions.getOrCreate(msg.channel, msg.peerId, msg.senderName);
+        const rec = this.sessions.get(key);
+        const hist = this.sessions.listHistory(key).slice(0, 15);
+        const lines = [
+          `Sessions for ${key}`,
+          ``,
+          `Active: ${rec?.sessionId ?? "(none)"}  msgs=${rec?.messageCount ?? 0}`,
+          rec?.sessionFile ? `  ${rec.sessionFile}` : undefined,
+          ``,
+          hist.length ? `Previous (newest first):` : `No archived sessions yet. Use /new to archive the current one.`,
+        ].filter((l) => l !== undefined) as string[];
+        for (const h of hist) {
+          const short = h.sessionId.length > 12 ? h.sessionId.slice(0, 8) : h.sessionId;
+          lines.push(
+            `• ${short}…  msgs=${h.messageCount}  ${h.archivedAt ?? h.updatedAt}`,
+          );
+        }
+        if (hist.length) {
+          lines.push(``, `Resume: /resume <id>  (short prefix is ok)`);
+        }
+        return lines.join("\n");
+      }
+
+      case "resume": {
+        if (!arg) {
+          return [
+            `Usage: /resume <session-id>`,
+            `List archived ids with /sessions`,
+            `Short prefixes work (6+ characters).`,
+          ].join("\n");
+        }
+        const key = makeSessionKey(msg.channel, msg.peerId);
+        const result = await this.agent.resumeSession(arg, { key });
+        if (!result.ok) return result.error;
+        return [
+          `Resumed session ${result.sessionId}`,
+          result.sessionFile ? `file: ${result.sessionFile}` : undefined,
+          `Send a message to continue this transcript.`,
+        ]
+          .filter(Boolean)
+          .join("\n");
       }
 
       case "status": {

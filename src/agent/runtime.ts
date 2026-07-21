@@ -367,18 +367,43 @@ export class AgentRuntime {
 
   async resetSession(channel: ChannelId, peerId: string): Promise<string> {
     const key = makeSessionKey(channel, peerId);
-    const prev = this.cache.get(key);
-    if (prev?.unsub) prev.unsub();
-    if (prev) {
-      try {
-        prev.session.dispose();
-      } catch {
-        /* ignore */
-      }
-      this.cache.delete(key);
-    }
+    await this.dropCachedSession(key);
     const rec = this.deps.sessions.reset(key) ?? this.deps.sessions.getOrCreate(channel, peerId);
     return rec.sessionId;
+  }
+
+  /**
+   * Resume a previous transcript for a peer (or discover peer from id).
+   * Drops any in-memory Pi session so the next turn reloads from the jsonl.
+   */
+  async resumeSession(
+    sessionIdOrPath: string,
+    opts?: { key?: string; channel?: ChannelId; peerId?: string },
+  ): Promise<{ ok: true; key: string; sessionId: string; sessionFile?: string } | { ok: false; error: string }> {
+    const preferredKey =
+      opts?.key ??
+      (opts?.channel && opts?.peerId ? makeSessionKey(opts.channel, opts.peerId) : undefined);
+    const result = this.deps.sessions.resumeById(sessionIdOrPath, preferredKey);
+    if (!result.ok) return result;
+    await this.dropCachedSession(result.rec.key);
+    return {
+      ok: true,
+      key: result.rec.key,
+      sessionId: result.rec.sessionId,
+      sessionFile: result.rec.sessionFile,
+    };
+  }
+
+  private async dropCachedSession(key: string): Promise<void> {
+    const prev = this.cache.get(key);
+    if (!prev) return;
+    if (prev.unsub) prev.unsub();
+    try {
+      prev.session.dispose();
+    } catch {
+      /* ignore */
+    }
+    this.cache.delete(key);
   }
 
   async disposeAll(): Promise<void> {
@@ -984,7 +1009,7 @@ You have coding tools (read, bash, edit, write, grep, find, ls) plus:
 - **web_fetch** — Tavily extract from one or more URLs (markdown/text). Use after web_search or when the user gives URLs.
 - web_get — plain HTTP fetch + HTML→text (no JS). Fallback for simple static pages when Tavily is unnecessary.
 - browser_open / browser_snapshot / browser_click / browser_fill / browser_screenshot / browser_eval / browser_close — **real browser automation** via agent-browser
-- session_list / session_reset — conversation session management
+- session_list / session_reset / session_resume — conversation session management (list, reset/archive, resume previous)
 - skill_list / skill_load / skill_create / skill_delete / skill_find / skill_install — **skills system**
 - **Vision:** users may attach photos/images from Telegram. When images are present they are included as vision input — describe and act on what you see. File copies are also saved under the workspace media dir for tool use.
 - **Voice:** Telegram voice notes (and audio files) are speech-to-text transcribed before they reach you. The user message text is the transcript — treat it as if they typed it. If transcription failed, the message says so and the audio path is listed under Attachments.

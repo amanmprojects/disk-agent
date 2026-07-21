@@ -44,6 +44,7 @@ export const DISK_TOOL_NAMES = [
   "browser_close",
   "session_list",
   "session_reset",
+  "session_resume",
   ...SKILL_TOOL_NAMES,
 ] as const;
 
@@ -378,24 +379,57 @@ export function createDiskTools(ctx: ToolContext) {
   const session_list = defineTool({
     name: "session_list",
     label: "Session List",
-    description: "List active conversation sessions known to the gateway.",
-    parameters: Type.Object({}),
-    async execute() {
-      const sessions = ctx.sessions.list().slice(0, 30);
+    description:
+      "List conversation sessions. By default lists active peers; set history=true for archived transcripts (from /new resets).",
+    parameters: Type.Object({
+      history: Type.Optional(
+        Type.Boolean({ description: "If true, list archived previous sessions instead of active ones" }),
+      ),
+      key: Type.Optional(
+        Type.String({ description: "Optional peer key filter, e.g. telegram:12345 or cli:local" }),
+      ),
+    }),
+    async execute(_id, params) {
+      if (params.history) {
+        const rows = ctx.sessions.listHistory(params.key).slice(0, 40);
+        const text =
+          rows.length === 0
+            ? "No archived sessions."
+            : rows
+                .map(
+                  (s) =>
+                    `- ${s.sessionId} | ${s.key} | msgs=${s.messageCount} | archived=${s.archivedAt ?? s.updatedAt}`,
+                )
+                .join("\n");
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { mode: "history", count: rows.length, sessions: rows as unknown[] },
+        };
+      }
+      let sessions = ctx.sessions.list();
+      if (params.key) sessions = sessions.filter((s) => s.key === params.key);
+      sessions = sessions.slice(0, 30);
       const text =
         sessions.length === 0
           ? "No sessions."
           : sessions
-              .map((s) => `- ${s.key} | msgs=${s.messageCount} | updated=${s.updatedAt} | id=${s.sessionId}`)
+              .map((s) => {
+                const archived = s.history?.length ? ` | archived=${s.history.length}` : "";
+                return `- ${s.key} | msgs=${s.messageCount} | updated=${s.updatedAt} | id=${s.sessionId}${archived}`;
+              })
               .join("\n");
-      return { content: [{ type: "text" as const, text }], details: { sessions } };
+      return {
+        content: [{ type: "text" as const, text }],
+        details: { mode: "active", count: sessions.length, sessions: sessions as unknown[] },
+      };
     },
   });
 
   const session_reset = defineTool({
     name: "session_reset",
     label: "Session Reset",
-    description: "Reset a session by key (e.g. telegram:12345), starting a fresh conversation transcript.",
+    description:
+      "Reset a session by key (e.g. telegram:12345), archiving the current transcript and starting a fresh one.",
     parameters: Type.Object({ key: Type.String() }),
     async execute(_id, params) {
       const rec = ctx.sessions.reset(params.key);
@@ -407,6 +441,45 @@ export function createDiskTools(ctx: ToolContext) {
           },
         ],
         details: { rec },
+      };
+    },
+  });
+
+  const session_resume = defineTool({
+    name: "session_resume",
+    label: "Session Resume",
+    description:
+      "Resume a previous session transcript by id (full or short prefix) or .jsonl path. Archives the current transcript if switching away.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Session id, short prefix (6+ chars), or path to .jsonl" }),
+      key: Type.Optional(
+        Type.String({ description: "Peer key when disambiguating, e.g. telegram:12345" }),
+      ),
+    }),
+    async execute(_id, params) {
+      const result = ctx.sessions.resumeById(params.id, params.key);
+      const details = result.ok
+        ? {
+            ok: true,
+            error: "",
+            key: result.rec.key,
+            sessionId: result.rec.sessionId,
+            sessionFile: result.rec.sessionFile ?? "",
+          }
+        : {
+            ok: false,
+            error: result.error,
+            key: "",
+            sessionId: "",
+            sessionFile: "",
+          };
+      const text = result.ok
+        ? `Resumed ${result.rec.key} → session ${result.rec.sessionId}` +
+          (result.rec.sessionFile ? `\nfile: ${result.rec.sessionFile}` : "")
+        : `Error: ${result.error}`;
+      return {
+        content: [{ type: "text" as const, text }],
+        details,
       };
     },
   });
@@ -430,6 +503,7 @@ export function createDiskTools(ctx: ToolContext) {
     browser_close,
     session_list,
     session_reset,
+    session_resume,
     ...createSkillTools(ctx.skills),
   ];
 }

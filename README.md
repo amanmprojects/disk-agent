@@ -125,7 +125,7 @@ disk-agent setup
 | **Memory** | OpenClaw-style `SOUL.md` / `USER.md` / `MEMORY.md` / daily `memory/YYYY-MM-DD.md` + searchable fact store |
 | **Cron + heartbeat** | Cron expressions, `every 30m`, `daily at 09:00`, one-shots; quiet hours; `HEARTBEAT_OK` suppression |
 | **Browser / web** | Tavily `web_search` / `web_fetch` (`@tavily/pi-extension`, needs `TAVILY_API_KEY`); `web_get` (fetch+HTML strip); full automation when [`agent-browser`](https://www.npmjs.com/package/agent-browser) is installed |
-| **Sessions** | Per-peer Pi session transcripts, `/new` reset, serialized lanes (no parallel tool conflicts) |
+| **Sessions** | Per-peer Pi session transcripts, `/new` archive+reset, `/sessions` + `/resume`, serialized lanes |
 | **Coding agent** | Full Pi toolset: read, bash, edit, write, grep, find, ls |
 | **Skills / identity** | Workspace + user skills under one home tree; bootstrap context each run |
 
@@ -218,13 +218,24 @@ disk-agent chat           Interactive local REPL
 disk-agent pair <code>    Approve Telegram pairing
 disk-agent status         Config / SuperGrok auth status
 disk-agent models         List SuperGrok / xAI / other models
-disk-agent sessions       List conversation sessions
+disk-agent sessions              List active conversation sessions
+disk-agent sessions history      List archived (previous) sessions
+disk-agent sessions resume <id>  Resume a previous session by id or .jsonl path
+disk-agent sessions files        List raw pi-sessions transcripts (incl. orphans)
+disk-agent chat --resume <id>    Start CLI chat on a previous session
 disk-agent skills list|show|create|delete|paths
 disk-agent memory list|search|save
 disk-agent cron list|add|remove|run
 ```
 
-Chat slash commands include `/context` (window usage) and `/effort <level>` (thinking effort).
+Chat slash commands include `/context` (window usage), `/effort <level>` (thinking effort), `/sessions` (previous transcripts for this chat), and `/resume <id>`.
+
+### Session history
+
+- Each peer has one **active** transcript.
+- `/new` (or `session_reset`) **archives** the current transcript and starts fresh.
+- List archives: `disk-agent sessions history` or `/sessions` in chat.
+- Resume: `disk-agent sessions resume <id>` / `disk-agent chat --resume <id>` / `/resume <id>` (short id prefixes work).
 
 ### Cron examples
 
@@ -318,7 +329,7 @@ Built-in (Pi): `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
 | `web_fetch` | Tavily extract from URLs |
 | `web_get` | Fetch URL → text (plain HTTP) |
 | `browser_open` / `snapshot` / `click` / `fill` / `screenshot` | Browser automation |
-| `session_list` / `session_reset` | Session management |
+| `session_list` / `session_reset` / `session_resume` | Session management (list, archive, resume) |
 | `skill_list` / `skill_load` / `skill_create` / … | Skills |
 
 ## Library usage

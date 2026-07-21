@@ -13,6 +13,8 @@ export interface BotCommandDef {
 export const TELEGRAM_MENU_COMMANDS: BotCommandDef[] = [
   { command: "help", description: "Show all commands & tips", menu: true },
   { command: "new", description: "Reset this chat session", menu: true },
+  { command: "sessions", description: "List previous sessions for this chat", menu: true },
+  { command: "resume", description: "Resume a previous session by id", menu: true },
   { command: "status", description: "Gateway / model / memory status", menu: true },
   { command: "context", description: "Context window usage for this chat", menu: true },
   { command: "effort", description: "Set thinking effort (off…xhigh)", menu: true },
@@ -55,6 +57,8 @@ export function helpText(agentName: string): string {
     `/model supergrok/grok-4.5`,
     `/context — how full the context window is`,
     `/effort medium — thinking: off|minimal|low|medium|high|xhigh`,
+    `/sessions — previous transcripts for this chat`,
+    `/resume 019f841c — continue an archived session`,
     `/browser https://example.com`,
     `/cron`,
     `/thoughts on       — full model reasoning when each thought ends`,

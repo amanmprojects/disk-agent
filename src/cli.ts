@@ -17,6 +17,7 @@ import { runSetup, runDoctor } from "./setup.js";
 import { loginProvider } from "./auth/login.js";
 import { getVersion } from "./version.js";
 import { describeLayout, getPaths } from "./paths.js";
+import { SessionRegistry } from "./session/manager.js";
 import {
   getDaemonStatus,
   restartDaemon,
@@ -331,6 +332,10 @@ program
   .option("--data-dir <path>", "Override data directory")
   .option("--workspace <path>", "Override workspace directory")
   .option("--cwd <path>", "Coding tools working directory")
+  .option(
+    "--resume <id>",
+    "Resume a previous session by id (prefix ok) or .jsonl path before chatting",
+  )
   .action(async (opts) => {
     const cfg = loadCfg(opts);
     if (opts.cwd) cfg.cwd = opts.cwd;
@@ -343,7 +348,29 @@ program
     );
     gw.cron.start();
 
-    console.log(chalk.cyan(`${cfg.agentName} CLI chat. /exit to quit, /new to reset.`));
+    if (opts.resume) {
+      const result = await gw.agent.resumeSession(String(opts.resume), {
+        key: "cli:local",
+      });
+      if (!result.ok) {
+        console.error(chalk.red(result.error));
+        await gw.stop();
+        process.exitCode = 1;
+        return;
+      }
+      console.log(
+        chalk.cyan(
+          `Resumed ${result.key} session ${result.sessionId}` +
+            (result.sessionFile ? `\n  ${result.sessionFile}` : ""),
+        ),
+      );
+    }
+
+    console.log(
+      chalk.cyan(
+        `${cfg.agentName} CLI chat. /exit to quit, /new to reset, /sessions, /resume <id>.`,
+      ),
+    );
     const rl = createInterface({ input, output });
     try {
       while (true) {
@@ -499,14 +526,113 @@ program
 
 program
   .command("sessions")
-  .description("List conversation sessions")
+  .description("List, show history of, or resume conversation sessions")
   .option("--data-dir <path>", "Override data directory")
-  .action((opts) => {
+  .option("--workspace <path>", "Override workspace directory")
+  .argument(
+    "[action]",
+    "list | history | resume | files  (default: list)",
+    "list",
+  )
+  .argument("[idOrKey]", "For history: peer key. For resume: session id or .jsonl path")
+  .option("--key <peer>", "Peer key when resuming (e.g. cli:local, telegram:123)")
+  .option("--limit <n>", "Max rows to print", "40")
+  .action(async (action: string, idOrKey: string | undefined, opts) => {
     const cfg = loadCfg(opts);
-    const gw = new Gateway(cfg);
-    for (const s of gw.sessions.list()) {
-      console.log(`${s.key}  msgs=${s.messageCount}  updated=${s.updatedAt}  id=${s.sessionId}`);
+    const sessions = new SessionRegistry(cfg);
+    const act = (action || "list").toLowerCase();
+    const limit = Math.max(1, Number(opts.limit) || 40);
+
+    if (act === "list" || act === "ls") {
+      const rows = sessions.list().slice(0, limit);
+      if (!rows.length) {
+        console.log("No sessions.");
+        return;
+      }
+      for (const s of rows) {
+        const archived = s.history?.length ? `  archived=${s.history.length}` : "";
+        console.log(
+          `${s.key}  msgs=${s.messageCount}  updated=${s.updatedAt}  id=${s.sessionId}${archived}`,
+        );
+      }
+      console.log("");
+      console.log(
+        chalk.dim(
+          "Previous transcripts: disk-agent sessions history [key]\n" +
+            "Resume one:          disk-agent sessions resume <id>\n" +
+            "Chat with resume:    disk-agent chat --resume <id>",
+        ),
+      );
+      return;
     }
+
+    if (act === "history" || act === "prev" || act === "previous") {
+      const key = idOrKey;
+      const rows = sessions.listHistory(key).slice(0, limit);
+      if (!rows.length) {
+        console.log(
+          key
+            ? `No archived sessions for ${key}.`
+            : "No archived sessions. They appear after /new or sessions reset.",
+        );
+        return;
+      }
+      for (const s of rows) {
+        console.log(
+          `${s.sessionId}  ${s.key}  msgs=${s.messageCount}  archived=${s.archivedAt ?? s.updatedAt}` +
+            (s.sessionFile ? `\n  ${s.sessionFile}` : ""),
+        );
+      }
+      return;
+    }
+
+    if (act === "resume") {
+      const id = idOrKey;
+      if (!id) {
+        console.error("Usage: disk-agent sessions resume <session-id|path> [--key peer]");
+        process.exitCode = 1;
+        return;
+      }
+      // Prefer registry-only resume when no gateway is running; still drop in-process cache if we spin one up
+      const result = sessions.resumeById(id, opts.key);
+      if (!result.ok) {
+        console.error(chalk.red(result.error));
+        process.exitCode = 1;
+        return;
+      }
+      console.log(chalk.green(`Resumed ${result.rec.key}`));
+      console.log(`  id:   ${result.rec.sessionId}`);
+      if (result.rec.sessionFile) console.log(`  file: ${result.rec.sessionFile}`);
+      if (result.rec.key === "cli:local") {
+        console.log(chalk.dim("Continue with: disk-agent chat"));
+      } else {
+        console.log(
+          chalk.dim(
+            "Next message on that peer will use this transcript. If the gateway is running, restart is not required.",
+          ),
+        );
+      }
+      return;
+    }
+
+    if (act === "files" || act === "transcripts") {
+      const files = sessions.listTranscriptFiles().slice(0, limit);
+      if (!files.length) {
+        console.log("No transcript files under pi-sessions/.");
+        return;
+      }
+      for (const f of files) {
+        const known = sessions.find(f.sessionId);
+        const tag = known.length
+          ? known.map((k) => `${k.key}${k.active ? "*" : ""}`).join(",")
+          : "(orphan)";
+        console.log(`${f.sessionId}  ${f.mtime}  ${tag}\n  ${f.path}`);
+      }
+      return;
+    }
+
+    console.error(`Unknown action ${act}. Use: list | history | resume | files`);
+    process.exitCode = 1;
   });
 
 program
