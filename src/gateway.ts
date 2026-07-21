@@ -18,11 +18,19 @@ import type {
 import { KeyedQueue } from "./utils.js";
 import { helpText } from "./channels/commands.js";
 import { ALL_AGENT_TOOL_NAMES } from "./agent/tools.js";
-import { parseOnOff, PrefsStore, type PeerPrefs } from "./prefs.js";
+import {
+  formatStepsMode,
+  parseOnOff,
+  parseStepsMode,
+  PrefsStore,
+  stepsEnabled,
+  type PeerPrefs,
+} from "./prefs.js";
 import {
   formatCronHtml,
   formatFinalHtml,
   formatThoughtHtml,
+  formatToolCallHtml,
   formatToolDoneHtml,
   formatToolRunningHtml,
   markdownToTelegramHtml,
@@ -141,8 +149,10 @@ export class Gateway {
         return deliverChain;
       };
 
+      const showSteps = stepsEnabled(prefs.showSteps);
+
       const onProgress =
-        prefs.showThoughts || prefs.showSteps
+        prefs.showThoughts || showSteps
           ? async (ev: LiveProgressEvent) => {
               await queueLive(async () => {
                 if (ev.kind === "thought") {
@@ -158,10 +168,14 @@ export class Gateway {
                   return;
                 }
 
-                if (!prefs.showSteps) return;
+                if (!showSteps) return;
 
                 if (ev.kind === "tool_start") {
-                  const html = formatToolRunningHtml(ev.name, ev.args);
+                  // minimal: call only; on: running… then edit with result
+                  const html =
+                    prefs.showSteps === "minimal"
+                      ? formatToolCallHtml(ev.name, ev.args)
+                      : formatToolRunningHtml(ev.name, ev.args);
                   const id = await this.deliver({
                     channel: msg.channel,
                     peerId: msg.peerId,
@@ -170,11 +184,14 @@ export class Gateway {
                     parseMode: msg.channel === "telegram" ? "HTML" : undefined,
                     silent: true,
                   });
-                  if (typeof id === "number") toolMsgIds.set(ev.id, id);
+                  if (prefs.showSteps === "on" && typeof id === "number") {
+                    toolMsgIds.set(ev.id, id);
+                  }
                   return;
                 }
 
-                if (ev.kind === "tool_end") {
+                // Results only in full "on" mode
+                if (ev.kind === "tool_end" && prefs.showSteps === "on") {
                   const html = formatToolDoneHtml(ev.name, ev.args, ev.ok, ev.detail);
                   const existing = toolMsgIds.get(ev.id);
                   await this.deliver({
@@ -198,7 +215,7 @@ export class Gateway {
             ? { channel: "telegram", peerId: msg.peerId, chatId: msg.chatId }
             : undefined,
         captureThoughts: prefs.showThoughts,
-        captureSteps: prefs.showSteps,
+        captureSteps: showSteps,
         onProgress,
       });
 
@@ -213,7 +230,7 @@ export class Gateway {
         msg.channel === "telegram"
           ? formatFinalHtml(
               bare,
-              prefs.showSteps || prefs.showThoughts
+              showSteps || prefs.showThoughts
                 ? { durationMs: result.durationMs, toolCalls: result.toolCalls }
                 : undefined,
             )
@@ -608,13 +625,19 @@ export class Gateway {
       case "trace": {
         const peerKey = makeSessionKey(msg.channel, msg.peerId);
         const cur = this.prefs.get(peerKey);
-        const v = parseOnOff(arg);
-        if (v === null && !arg) {
-          return `Steps (tool activity): ${cur.showSteps ? "ON" : "OFF"}\nUsage: /steps on|off`;
+        const mode = parseStepsMode(arg);
+        if (mode === null && !arg) {
+          return `Steps (tool activity): ${formatStepsMode(cur.showSteps)}\nUsage: /steps on|off|minimal`;
         }
-        if (v === null) return "Usage: /steps on|off";
-        const next = this.prefs.set(peerKey, { showSteps: v });
-        return `Steps ${next.showSteps ? "ON" : "OFF"} — I'll ${next.showSteps ? "send each tool call as its own message as it happens" : "hide tool activity"}.`;
+        if (mode === null) return "Usage: /steps on|off|minimal";
+        const next = this.prefs.set(peerKey, { showSteps: mode });
+        const desc =
+          next.showSteps === "on"
+            ? "send each tool call (and its result) as its own message as it happens"
+            : next.showSteps === "minimal"
+              ? "send each tool call as its own message (no results)"
+              : "hide tool activity";
+        return `Steps ${formatStepsMode(next.showSteps)} — I'll ${desc}.`;
       }
 
       case "verbose":
@@ -628,8 +651,11 @@ export class Gateway {
             this.prefs.format(cur),
           ].join("\n");
         }
-        if (v === null) return "Usage: /verbose on|off\n(turns both thoughts + steps together)";
-        const next = this.prefs.set(peerKey, { showThoughts: v, showSteps: v });
+        if (v === null) return "Usage: /verbose on|off\n(turns both thoughts + full steps together)";
+        const next = this.prefs.set(peerKey, {
+          showThoughts: v,
+          showSteps: v ? "on" : "off",
+        });
         return `Verbose ${v ? "ON" : "OFF"}\n${this.prefs.format(next)}`;
       }
 
@@ -661,7 +687,7 @@ function composeFinalReply(
   result: AgentRunResult,
   prefs: PeerPrefs,
 ): string {
-  if (!(prefs.showSteps || prefs.showThoughts)) return answer;
+  if (!(stepsEnabled(prefs.showSteps) || prefs.showThoughts)) return answer;
   const meta = [`${result.durationMs}ms`];
   if (result.toolCalls) meta.push(`${result.toolCalls} tools`);
   return `${answer}

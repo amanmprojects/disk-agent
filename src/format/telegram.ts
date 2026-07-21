@@ -72,11 +72,16 @@ function meaningfulArgs(args: string): string {
   return a;
 }
 
-export function formatToolRunningHtml(name: string, args: string): string {
+/** Tool call only (minimal steps mode) — no running/result status. */
+export function formatToolCallHtml(name: string, args: string): string {
   const title = `<b>⚙ ${escapeHtml(name)}</b>`;
   const a = meaningfulArgs(args);
   const argLine = a ? `\n<code>${escapeHtml(clip(a, 500))}</code>` : "";
-  return `${title}${argLine}\n<i>running…</i>`;
+  return `${title}${argLine}`;
+}
+
+export function formatToolRunningHtml(name: string, args: string): string {
+  return `${formatToolCallHtml(name, args)}\n<i>running…</i>`;
 }
 
 export function formatToolDoneHtml(
