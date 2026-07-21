@@ -138,6 +138,7 @@ export class Gateway {
       const prefs = this.prefs.get(peerKey);
 
       // Live stream progress:
+      //  - intermediate assistant text → own message before tools (order-preserving)
       //  - thoughts on → grey blockquote when each thought finishes
       //  - thoughts minimal → italic "Thinking…" while reasoning, then delete
       //  - tools on → one message per tool, edited from "running…" → result
@@ -172,96 +173,113 @@ export class Gateway {
         }
       };
 
-      const onProgress =
-        showThoughts || showSteps
-          ? async (ev: LiveProgressEvent) => {
-              await queueLive(async () => {
-                if (ev.kind === "thinking_start") {
-                  if (prefs.showThoughts !== "minimal") return;
-                  thinkingDepth += 1;
-                  if (thinkingDepth === 1 && thinkingMsgId == null) {
-                    const id = await this.deliver({
-                      channel: msg.channel,
-                      peerId: msg.peerId,
-                      chatId: msg.chatId,
-                      text: isTg ? formatThinkingIndicatorHtml() : "Thinking…",
-                      parseMode: isTg ? "HTML" : undefined,
-                      silent: true,
-                    });
-                    if (typeof id === "number") thinkingMsgId = id;
-                  }
-                  return;
-                }
-
-                if (ev.kind === "thinking_end") {
-                  if (prefs.showThoughts !== "minimal") return;
-                  thinkingDepth = Math.max(0, thinkingDepth - 1);
-                  if (thinkingDepth === 0) await clearThinkingIndicator();
-                  return;
-                }
-
-                if (ev.kind === "thought") {
-                  // Full thoughts mode only — minimal uses the indicator above
-                  if (prefs.showThoughts !== "on") return;
-                  await this.deliver({
-                    channel: msg.channel,
-                    peerId: msg.peerId,
-                    chatId: msg.chatId,
-                    text: isTg ? formatThoughtHtml(ev.text) : ev.text,
-                    parseMode: isTg ? "HTML" : undefined,
-                    silent: true,
-                  });
-                  return;
-                }
-
-                if (!showSteps) return;
-
-                if (ev.kind === "tool_start") {
-                  // Clear thinking indicator so tool lines stay tidy
-                  if (prefs.showThoughts === "minimal") {
-                    thinkingDepth = 0;
-                    await clearThinkingIndicator();
-                  }
-                  // minimal: name only; on: running… then edit with result
-                  const html =
-                    prefs.showSteps === "minimal"
-                      ? formatToolNameHtml(ev.name)
-                      : formatToolRunningHtml(ev.name, ev.args);
-                  const id = await this.deliver({
-                    channel: msg.channel,
-                    peerId: msg.peerId,
-                    chatId: msg.chatId,
-                    text:
-                      prefs.showSteps === "minimal" && !isTg
-                        ? `⚙ ${ev.name}`
-                        : html,
-                    parseMode: isTg ? "HTML" : undefined,
-                    silent: true,
-                  });
-                  if (prefs.showSteps === "on" && typeof id === "number") {
-                    toolMsgIds.set(ev.id, id);
-                  }
-                  return;
-                }
-
-                // Results only in full "on" mode
-                if (ev.kind === "tool_end" && prefs.showSteps === "on") {
-                  const html = formatToolDoneHtml(ev.name, ev.args, ev.ok, ev.detail);
-                  const existing = toolMsgIds.get(ev.id);
-                  await this.deliver({
-                    channel: msg.channel,
-                    peerId: msg.peerId,
-                    chatId: msg.chatId,
-                    text: html,
-                    parseMode: isTg ? "HTML" : undefined,
-                    silent: true,
-                    editMessageId: existing,
-                  });
-                  toolMsgIds.delete(ev.id);
-                }
-              });
+      // Always subscribe: mid-turn text must deliver even when steps/thoughts are off
+      const onProgress = async (ev: LiveProgressEvent) => {
+        await queueLive(async () => {
+          // Assistant narration between tool rounds — always deliver in order
+          if (ev.kind === "text") {
+            if (prefs.showThoughts === "minimal") {
+              thinkingDepth = 0;
+              await clearThinkingIndicator();
             }
-          : undefined;
+            const body = ev.text.trim();
+            if (!body) return;
+            await this.deliver({
+              channel: msg.channel,
+              peerId: msg.peerId,
+              chatId: msg.chatId,
+              text: isTg ? plainToTelegramHtml(body) : body,
+              parseMode: isTg ? "HTML" : undefined,
+              silent: true,
+            });
+            return;
+          }
+
+          if (ev.kind === "thinking_start") {
+            if (prefs.showThoughts !== "minimal") return;
+            thinkingDepth += 1;
+            if (thinkingDepth === 1 && thinkingMsgId == null) {
+              const id = await this.deliver({
+                channel: msg.channel,
+                peerId: msg.peerId,
+                chatId: msg.chatId,
+                text: isTg ? formatThinkingIndicatorHtml() : "Thinking…",
+                parseMode: isTg ? "HTML" : undefined,
+                silent: true,
+              });
+              if (typeof id === "number") thinkingMsgId = id;
+            }
+            return;
+          }
+
+          if (ev.kind === "thinking_end") {
+            if (prefs.showThoughts !== "minimal") return;
+            thinkingDepth = Math.max(0, thinkingDepth - 1);
+            if (thinkingDepth === 0) await clearThinkingIndicator();
+            return;
+          }
+
+          if (ev.kind === "thought") {
+            // Full thoughts mode only — minimal uses the indicator above
+            if (prefs.showThoughts !== "on") return;
+            await this.deliver({
+              channel: msg.channel,
+              peerId: msg.peerId,
+              chatId: msg.chatId,
+              text: isTg ? formatThoughtHtml(ev.text) : ev.text,
+              parseMode: isTg ? "HTML" : undefined,
+              silent: true,
+            });
+            return;
+          }
+
+          if (!showSteps) return;
+
+          if (ev.kind === "tool_start") {
+            // Clear thinking indicator so tool lines stay tidy
+            if (prefs.showThoughts === "minimal") {
+              thinkingDepth = 0;
+              await clearThinkingIndicator();
+            }
+            // minimal: name only; on: running… then edit with result
+            const html =
+              prefs.showSteps === "minimal"
+                ? formatToolNameHtml(ev.name)
+                : formatToolRunningHtml(ev.name, ev.args);
+            const id = await this.deliver({
+              channel: msg.channel,
+              peerId: msg.peerId,
+              chatId: msg.chatId,
+              text:
+                prefs.showSteps === "minimal" && !isTg
+                  ? `⚙ ${ev.name}`
+                  : html,
+              parseMode: isTg ? "HTML" : undefined,
+              silent: true,
+            });
+            if (prefs.showSteps === "on" && typeof id === "number") {
+              toolMsgIds.set(ev.id, id);
+            }
+            return;
+          }
+
+          // Results only in full "on" mode
+          if (ev.kind === "tool_end" && prefs.showSteps === "on") {
+            const html = formatToolDoneHtml(ev.name, ev.args, ev.ok, ev.detail);
+            const existing = toolMsgIds.get(ev.id);
+            await this.deliver({
+              channel: msg.channel,
+              peerId: msg.peerId,
+              chatId: msg.chatId,
+              text: html,
+              parseMode: isTg ? "HTML" : undefined,
+              silent: true,
+              editMessageId: existing,
+            });
+            toolMsgIds.delete(ev.id);
+          }
+        });
+      };
 
       const result = await this.agent.run(msg, {
         deliverHint:
@@ -281,9 +299,24 @@ export class Gateway {
         await clearThinkingIndicator();
       }
 
-      const bare = result.text?.trim() || "(no response)";
-      // Suppress heartbeat OK
-      const suppress = bare === "HEARTBEAT_OK" || bare.startsWith("HEARTBEAT_OK\n");
+      // Mid-turn text was already delivered live; only send the undelivered tail.
+      // When no live text was streamed, tailText is undefined → use full text.
+      const full = result.text?.trim() || "";
+      const bare =
+        result.tailText !== undefined
+          ? result.tailText.trim()
+          : full || "(no response)";
+      // Suppress heartbeat OK (check full text so a live-only turn still suppresses)
+      const suppress =
+        full === "HEARTBEAT_OK" ||
+        full.startsWith("HEARTBEAT_OK\n") ||
+        bare === "HEARTBEAT_OK" ||
+        bare.startsWith("HEARTBEAT_OK\n");
+
+      // Nothing left after intermediate messages — skip empty final bubble
+      if (!bare && result.tailText !== undefined) {
+        return suppress ? "" : full;
+      }
 
       // Duration / tool-count footer only for full verbose (/verbose on)
       const showMeta = prefs.showSteps === "on" || prefs.showThoughts === "on";
@@ -307,7 +340,7 @@ export class Gateway {
         suppress,
       });
 
-      return suppress ? "" : bare;
+      return suppress ? "" : full || bare;
     });
   }
 

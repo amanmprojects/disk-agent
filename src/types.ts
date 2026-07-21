@@ -60,6 +60,8 @@ export type LiveProgressEvent =
   | { kind: "thinking_start" }
   | { kind: "thinking_end" }
   | { kind: "thought"; text: string }
+  /** Assistant narration between tool rounds (interleaved text) */
+  | { kind: "text"; text: string }
   | { kind: "tool_start"; id: string; name: string; args: string }
   | {
       kind: "tool_end";
@@ -138,7 +140,18 @@ export interface PairingRequest {
 }
 
 export interface AgentRunResult {
+  /**
+   * Full assistant text for the turn (all segments joined).
+   * Prefer `tailText` for final delivery when intermediate segments were live-streamed.
+   */
   text: string;
+  /**
+   * When the model emitted narration before tool rounds, those segments are
+   * live-streamed via `onProgress` (`kind: "text"`). `tailText` is only the
+   * remaining undelivered segment after the last tool (may be empty).
+   * When no mid-turn text was streamed, this is undefined — use `text`.
+   */
+  tailText?: string;
   sessionKey: string;
   toolCalls: number;
   durationMs: number;

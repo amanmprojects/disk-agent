@@ -158,14 +158,30 @@ export class AgentRuntime {
     // Track tool args by id so end events can include them
     const toolArgsById = new Map<string, string>();
 
+    // When mid-turn narration was live-streamed before tools, only the last
+    // undelivered segment goes out as the "final" Telegram/CLI bubble.
+    let tailText: string | undefined;
+    let streamedLiveText = false;
+
     try {
       const active = await this.getOrCreateSession(key, rec.sessionId, message, opts);
       const partials: string[] = [];
+      // Current assistant text segment (reset when flushed before a tool round)
+      const textSegment: string[] = [];
       // After tool calls, the next text segment often starts mid-sentence without a
       // leading newline — inject a paragraph break so we don't get "now.Done".
       let needsTextBoundary = false;
       // Buffer thinking deltas until thinking_end (one message per thought block)
       const thinkingBuffers = new Map<number, string[]>();
+
+      /** Emit pending assistant narration before tools so order matches the model stream. */
+      const flushTextSegment = () => {
+        const text = textSegment.join("").trim();
+        textSegment.length = 0;
+        if (!text) return;
+        streamedLiveText = true;
+        emit({ kind: "text", text });
+      };
 
       if (active.unsub) active.unsub();
       active.unsub = active.session.subscribe((event) => {
@@ -186,6 +202,7 @@ export class AgentRuntime {
               needsTextBoundary = false;
             }
             partials.push(ev.delta);
+            textSegment.push(ev.delta);
             void opts?.onPartial?.(partials.join(""));
           }
 
@@ -229,6 +246,8 @@ export class AgentRuntime {
         }
 
         if (event.type === "tool_execution_start") {
+          // Interleaved text: send narration that preceded this tool immediately
+          flushTextSegment();
           if (partials.length) needsTextBoundary = true;
           if (captureSteps) {
             toolCalls += 1;
@@ -280,13 +299,18 @@ export class AgentRuntime {
       } else {
         await active.session.prompt(prompt);
       }
-      // Flush any pending thought/step deliveries before returning
+      // Flush any pending thought/step/text deliveries before returning
       await chain;
 
       finalText =
         partials.join("").trim() ||
         (await this.extractLastAssistantText(active.session)) ||
         (await this.extractLastAssistantError(active.session));
+
+      // Remainder after live-streamed mid-turn segments (not flushed — no following tool)
+      if (streamedLiveText) {
+        tailText = textSegment.join("").trim();
+      }
 
       // Fallback: models that only attach thinking on the final message
       if (captureThoughts && !completedThoughts.length) {
@@ -331,6 +355,7 @@ export class AgentRuntime {
 
     return {
       text: finalText,
+      tailText,
       sessionKey: key,
       toolCalls,
       durationMs: Date.now() - started,

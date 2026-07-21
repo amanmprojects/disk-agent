@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Telegram / delivery
+
+- **Interleaved assistant text** is delivered in stream order: narration before a tool round is sent immediately, then tool activity, then the next text segment — not buffered into one combined final message
+  - Example: `That search was noisy…` appears after the first `web_search` and before the next one
+  - Final bubble only contains the remaining undelivered tail (plus optional verbose meta)
+
 ## 1.2.0
 
 ### CLI
