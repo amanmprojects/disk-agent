@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0
+
+### Telegram reply formatting
+
+- Convert a small markdown subset in agent replies to Telegram HTML (`parse_mode: HTML`):
+  - `**bold**`, `*italic*` (asterisks only), `` `inline code` ``, fenced code blocks, `[label](https://…)` links
+  - Bullet lists and plain newlines pass through unchanged
+  - Raw HTML from the model stays escaped (no tag injection)
+- System prompt documents supported Telegram-friendly formatting and keeps the **minimal markdown** guidance
+- Underscore italic (`_like_this_`) is intentionally unsupported so `snake_case` paths stay intact
+
 ## 1.0.0
 
 ### Ready for npm

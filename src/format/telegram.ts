@@ -3,13 +3,65 @@ import { escapeHtml } from "../utils.js";
 /**
  * Telegram delivery helpers.
  *
- * Agent/user text is HTML-escaped only (no Markdown conversion). Telegram HTML
- * is used solely for *our* chrome: tool lines, thoughts, meta footers.
+ * Final agent text uses a small markdown subset converted to Telegram HTML
+ * (`parse_mode: HTML`). Chrome we own (tools, thoughts, meta) is written as
+ * HTML tags directly and never goes through the markdown converter.
  */
 
-/** Escape agent/command text for Telegram HTML parse mode — preserve content as-is. */
+/**
+ * Convert agent/command text to Telegram HTML.
+ *
+ * Supported markdown subset (everything else is escaped as plain text):
+ * - **bold**
+ * - *italic* (single asterisks; not underscore — avoids snake_case paths)
+ * - `inline code`
+ * - ``` fenced code blocks ```
+ * - [label](https://…) links
+ *
+ * Bullets (`- item`) and newlines pass through as plain text (Telegram shows them fine).
+ */
 export function plainToTelegramHtml(input: string): string {
-  return escapeHtml(input.replace(/\r\n/g, "\n"));
+  const text = input.replace(/\r\n/g, "\n");
+  const fences: string[] = [];
+  const codes: string[] = [];
+
+  // 1. Extract fenced code blocks first
+  let s = text.replace(/```(?:([a-zA-Z0-9_+-]+)\r?\n)?([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
+    const i = fences.length;
+    // Drop one leading newline (common after ```) and one trailing newline before ```
+    const body = escapeHtml(code.replace(/^\n/, "").replace(/\n$/, ""));
+    if (lang) {
+      fences.push(`<pre><code class="language-${escapeHtml(lang)}">${body}</code></pre>`);
+    } else {
+      fences.push(`<pre>${body}</pre>`);
+    }
+    return `\u0000F${i}\u0000`;
+  });
+
+  // 2. Extract inline code
+  s = s.replace(/`([^`\n]+)`/g, (_m, code: string) => {
+    const i = codes.length;
+    codes.push(`<code>${escapeHtml(code)}</code>`);
+    return `\u0000C${i}\u0000`;
+  });
+
+  // 3. Escape the rest (raw HTML from the model cannot inject tags)
+  s = escapeHtml(s);
+
+  // 4. Links — label is already escaped; only allow http(s) hrefs
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label: string, url: string) => {
+    return `<a href="${escapeHtml(url)}">${label}</a>`;
+  });
+
+  // 5. Bold **…** then italic *…* (order matters)
+  s = s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  s = s.replace(/\*([^*\n]+)\*/g, "<i>$1</i>");
+
+  // 6. Restore protected segments
+  s = s.replace(/\u0000C(\d+)\u0000/g, (_m, i: string) => codes[Number(i)] ?? "");
+  s = s.replace(/\u0000F(\d+)\u0000/g, (_m, i: string) => fences[Number(i)] ?? "");
+
+  return s;
 }
 
 /** Grey-ish thought bubble via blockquote (Telegram renders these muted). */
