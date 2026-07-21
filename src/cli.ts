@@ -37,13 +37,17 @@ program
 program
   .command("setup")
   .description(
-    "Interactive setup: home, Telegram, Pi, extensions (supergrok + agent-browser), SuperGrok login",
+    "Interactive setup: home, Telegram, Tavily, Pi extensions (supergrok + browser + tavily), SuperGrok login",
   )
   .option("--name <name>", "Agent name")
   .option("--data-dir <path>", "Override home directory (~/.disk-agent)")
   .option("--workspace <path>", "Override workspace directory")
   .option("--telegram-token <token>", "Set Telegram bot token (skips prompt)")
   .option("--owner <id>", "Telegram owner user id")
+  .option(
+    "--tavily-key <key>",
+    "Set Tavily API key for web_search / web_fetch (skips prompt)",
+  )
   .option("--model <provider/id>", "Default model, e.g. supergrok/grok-4.5")
   .option("--cwd <path>", "Default coding tools working directory")
   .option("--skip-pi", "Skip installing pi CLI and Pi extensions")
@@ -72,6 +76,7 @@ program
         workspaceDir: opts.workspace,
         telegramToken: opts.telegramToken,
         ownerId: opts.owner,
+        tavilyApiKey: opts.tavilyKey,
         model: opts.model,
         cwd: opts.cwd,
         skipPi: Boolean(opts.skipPi),

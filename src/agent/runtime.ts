@@ -21,8 +21,9 @@ import {
   bootstrapSupergrok,
   getSharedModelRuntime,
   piAgentDir,
+  resolveAgentExtensionPaths,
   resolveModel,
-  resolveSupergrokExtension,
+  resolveTavilyExtension,
 } from "./pi.js";
 
 export interface RuntimeDeps {
@@ -69,6 +70,21 @@ export class AgentRuntime {
         extension: info.extensionPath,
         providers: info.providers,
       });
+      const tavily = resolveTavilyExtension();
+      this.log.info("tavily extension", {
+        loaded: Boolean(tavily),
+        path: tavily,
+        apiKey: Boolean(process.env.TAVILY_API_KEY?.trim()),
+      });
+      if (!tavily) {
+        this.log.warn(
+          "Tavily extension not found — install: npm i @tavily/pi-extension (or pi install npm:@tavily/pi-extension)",
+        );
+      } else if (!process.env.TAVILY_API_KEY?.trim()) {
+        this.log.warn(
+          "TAVILY_API_KEY not set — web_search / web_fetch will fail until it is in ~/.disk-agent/.env or the process env",
+        );
+      }
       await getSharedModelRuntime(this.log);
     } catch (err) {
       this.log.error("failed to bootstrap pi/supergrok", {
@@ -610,7 +626,7 @@ export class AgentRuntime {
       skillCatalog,
     });
 
-    const ext = resolveSupergrokExtension();
+    const extensionPaths = resolveAgentExtensionPaths();
     const settingsManager = SettingsManager.create(cwd, this.agentDir);
 
     const loader = new DefaultResourceLoader({
@@ -619,7 +635,7 @@ export class AgentRuntime {
       settingsManager,
       // Workspace + project + user skill roots (Pi also auto-discovers .agents/skills)
       additionalSkillPaths: skills.discoveryPaths(),
-      additionalExtensionPaths: ext ? [ext] : [],
+      additionalExtensionPaths: extensionPaths,
       systemPromptOverride: () => systemPrompt,
       appendSystemPromptOverride: () => [],
       agentsFilesOverride: (current) => ({
@@ -680,6 +696,10 @@ export class AgentRuntime {
         this.log.info("activated tools", {
           count: ALL_AGENT_TOOL_NAMES.length,
           browser: ALL_AGENT_TOOL_NAMES.filter((n) => n.startsWith("browser_")),
+          tavily: ALL_AGENT_TOOL_NAMES.filter(
+            (n) => n === "web_search" || n === "web_fetch",
+          ),
+          extensions: extensionPaths,
         });
       } else {
         this.log.debug("active tools", { active });
@@ -726,6 +746,15 @@ export class AgentRuntime {
           "",
           "The image(s) above are attached as vision input. Analyze them directly.",
           "Saved copies are also on disk at the paths listed if you need file tools.",
+        );
+      }
+      const hasVoice = message.attachments.some(
+        (a) => (a.type === "voice" || a.type === "audio") && a.transcript,
+      );
+      if (hasVoice) {
+        bits.push(
+          "",
+          "Voice/audio was transcribed to the user text above — respond to that content.",
         );
       }
     }
@@ -879,11 +908,14 @@ function buildSystemPrompt(opts: {
 You have coding tools (read, bash, edit, write, grep, find, ls) plus:
 - memory_save / memory_search / memory_log / memory_delete — persistent memory
 - cron_list / cron_add / cron_remove / cron_run — scheduled automations
-- web_get — plain HTTP fetch + HTML→text (no JS). Good for static pages.
+- **web_search** — Tavily web search (recent info, facts, source discovery). Prefer this for open-ended research.
+- **web_fetch** — Tavily extract from one or more URLs (markdown/text). Use after web_search or when the user gives URLs.
+- web_get — plain HTTP fetch + HTML→text (no JS). Fallback for simple static pages when Tavily is unnecessary.
 - browser_open / browser_snapshot / browser_click / browser_fill / browser_screenshot / browser_eval / browser_close — **real browser automation** via agent-browser
 - session_list / session_reset — conversation session management
 - skill_list / skill_load / skill_create / skill_delete / skill_find / skill_install — **skills system**
 - **Vision:** users may attach photos/images from Telegram. When images are present they are included as vision input — describe and act on what you see. File copies are also saved under the workspace media dir for tool use.
+- **Voice:** Telegram voice notes (and audio files) are speech-to-text transcribed before they reach you. The user message text is the transcript — treat it as if they typed it. If transcription failed, the message says so and the audio path is listed under Attachments.
 
 ## Skills (important)
 Skills are reusable SKILL.md packages (Agent Skills standard). Progressive disclosure:
@@ -896,6 +928,13 @@ Do not claim you cannot create or install skills — tools are registered.
 ### Installed skills catalog
 ${opts.skillCatalog}
 
+## Web research (important)
+- For open-ended questions, news, or "search the web": use **web_search** (Tavily).
+- After search, use **web_fetch** on promising URLs when you need page content.
+- Split multi-topic research into multiple focused web_search calls.
+- Do **not** claim you lack web search / Tavily — web_search and web_fetch are registered (need TAVILY_API_KEY in the process env).
+- Prefer web_search → web_fetch over browser_* for research. Use browser_* only for interactive sites (login, clicks, forms).
+
 ## Browser usage (important)
 When the user asks to "use the browser", interact with a site, click, fill forms, log in, or handle JS-rendered pages:
 1. Call browser_open(url)
@@ -904,13 +943,31 @@ When the user asks to "use the browser", interact with a site, click, fill forms
 4. browser_screenshot if visual confirmation helps
 5. browser_close when done
 Do **not** claim browser tools are unavailable — they are registered in this runtime.
-Prefer browser_* over web_get for interactive tasks. Use web_get only for quick static fetches.
+Prefer browser_* over web_get for interactive tasks. Use web_get only for quick static fetches when Tavily is not needed.
+
+## Reply format (Telegram-first)
+Most replies are delivered on Telegram as plain chat bubbles. Use **minimal markdown** so text stays readable on a phone and survives conversion to Telegram HTML.
+
+Do:
+- Prefer plain prose and short paragraphs
+- Simple bullet lists with \`- \` when listing a few items
+- **bold** sparingly for emphasis or short labels
+- \`inline code\` for commands, paths, ids, and keys
+- Fenced code blocks only for multi-line code or log snippets that must stay monospaced
+
+Do not:
+- Write dense GitHub-flavored markdown (tables, nested headings, task lists, HTML)
+- Use # / ## headings — they look noisy in chat; use a short bold label line instead if needed
+- Stack decorations (bold+italic+code), long horizontal rules, or decorative emoji walls
+- Dump huge code fences or walls of structured markdown when a short summary will do
+
+When channel is telegram: keep answers scannable — lead with the answer, then brief detail. For CLI you may be slightly longer, but still avoid heavy markdown.
 
 ## Operating principles
 1. Be useful and autonomous. Prefer taking action with tools over asking endless questions.
 2. Persist durable facts with memory_save. Append run notes with memory_log.
 3. For recurring work, create cron jobs in plain language schedules.
-4. Keep Telegram replies concise and scannable on a phone.
+4. Keep replies concise and phone-scannable; minimal markdown (see above).
 5. Never exfiltrate secrets. Ask before destructive operations.
 6. On HEARTBEAT turns: if nothing needs attention, reply exactly HEARTBEAT_OK.
 7. Read workspace files (SOUL.md, USER.md, MEMORY.md) when you need deeper context; they are also partially injected below.

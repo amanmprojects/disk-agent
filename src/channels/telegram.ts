@@ -9,6 +9,13 @@ import type {
   PairingRequest,
 } from "../types.js";
 import { chunkText, ensureDir, nowIso, readJson, uid, writeJson } from "../utils.js";
+import {
+  defaultSttModel,
+  resolveSttApiKey,
+  resolveSttProvider,
+  transcribeAudio,
+  voiceMessageText,
+} from "../voice/transcribe.js";
 import { helpText, telegramMenuPayload } from "./commands.js";
 import { downloadTelegramFile, guessMime, isImageMime } from "./media.js";
 
@@ -178,13 +185,48 @@ Type / for command suggestions, or /help for the full list.`,
       await this.handleMediaMessage(ctx);
     });
 
+    // Voice notes (OGG Opus) — download + optional Whisper STT
+    this.bot.on("message:voice", async (ctx) => {
+      if (!(await this.guard(ctx))) return;
+      if (!(await this.groupOk(ctx))) return;
+      if (!this.cfg.voice.enabled) {
+        await ctx.reply(
+          "Voice messages are disabled (voice.enabled: false). Send text instead.",
+        );
+        return;
+      }
+      await this.handleVoiceOrAudio(ctx, "voice");
+    });
+
+    // Audio file messages (optional via voice.includeAudio)
+    this.bot.on("message:audio", async (ctx) => {
+      if (!(await this.guard(ctx))) return;
+      if (!(await this.groupOk(ctx))) return;
+      if (!this.cfg.voice.enabled) return;
+      if (!this.cfg.voice.includeAudio) {
+        await ctx.reply(
+          "Audio file messages are disabled (voice.includeAudio: false). Send a voice note or text.",
+        );
+        return;
+      }
+      await this.handleVoiceOrAudio(ctx, "audio");
+    });
+
     // Captions for non-photo media that still carry caption-only delivery
     // (photo/document handlers already cover the common cases)
     this.bot.on("message:caption", async (ctx) => {
       if (!(await this.guard(ctx))) return;
       if (!(await this.groupOk(ctx))) return;
-      // Avoid double-handling when photo/document already processed
-      if (ctx.message.photo?.length || ctx.message.document || ctx.message.sticker) return;
+      // Avoid double-handling when photo/document/voice/audio already processed
+      if (
+        ctx.message.photo?.length ||
+        ctx.message.document ||
+        ctx.message.sticker ||
+        ctx.message.voice ||
+        ctx.message.audio
+      ) {
+        return;
+      }
       await this.handleMediaMessage(ctx);
     });
 
@@ -419,6 +461,119 @@ Type / for command suggestions, or /help for the full list.`,
       ctx.message?.reply_to_message?.from?.id != null &&
       ctx.message.reply_to_message.from.id === ctx.me.id;
     return mentioned || replyToBot;
+  }
+
+  /**
+   * Download a voice note or audio file, run STT when configured, and emit
+   * an IncomingMessage whose text is the transcript (or a clear fallback).
+   */
+  private async handleVoiceOrAudio(
+    ctx: Context,
+    kind: "voice" | "audio",
+  ): Promise<void> {
+    const token = this.cfg.telegram.botToken;
+    if (!token) return;
+
+    const caption = (ctx.message?.caption || "").trim();
+    const voice = ctx.message?.voice;
+    const audio = ctx.message?.audio;
+
+    const fileId =
+      kind === "voice" ? voice?.file_id : audio?.file_id;
+    if (!fileId) {
+      this.log.warn(`${kind} message missing file_id`);
+      return;
+    }
+
+    const durationSec =
+      kind === "voice" ? voice?.duration : audio?.duration;
+    const mimeType =
+      kind === "voice"
+        ? voice?.mime_type || "audio/ogg"
+        : audio?.mime_type || guessMime(audio?.file_name, "audio/mpeg");
+    const fileName =
+      kind === "voice"
+        ? `voice_${voice?.file_unique_id ?? "msg"}.ogg`
+        : audio?.file_name ||
+          `audio_${audio?.file_unique_id ?? "msg"}${mimeType.includes("ogg") ? ".ogg" : ".mp3"}`;
+
+    if (ctx.chat?.id) {
+      void this.typing(String(ctx.chat.id));
+    }
+
+    const attachments: MessageAttachment[] = [];
+    let localPath: string | undefined;
+    let sttError: string | undefined;
+    let transcript: string | undefined;
+
+    try {
+      const dl = await downloadTelegramFile({
+        token,
+        fileId,
+        dataDir: this.cfg.dataDir,
+        fileName,
+        mimeType,
+        type: kind,
+        caption: caption || undefined,
+        maxBytes: this.cfg.voice.maxBytes,
+      });
+      delete dl.attachment.base64; // never vision-encode audio
+      if (durationSec != null) dl.attachment.durationSec = durationSec;
+      localPath = dl.path;
+      attachments.push(dl.attachment);
+
+      const provider = resolveSttProvider(this.cfg.voice.provider);
+      if (provider === "none") {
+        sttError =
+          this.cfg.voice.provider === "none"
+            ? "STT disabled (voice.provider: none)"
+            : "no OPENAI_API_KEY or GROQ_API_KEY for STT";
+        this.log.info(`${kind} downloaded (no STT)`, {
+          path: localPath,
+          reason: sttError,
+        });
+      } else {
+        const model = defaultSttModel(provider, this.cfg.voice.model);
+        this.log.info(`transcribing ${kind}`, { provider, model, path: localPath });
+        const result = await transcribeAudio({
+          path: localPath,
+          mimeType: dl.attachment.mimeType,
+          fileName: dl.attachment.fileName,
+          provider,
+          model,
+          language: this.cfg.voice.language,
+          apiKey: resolveSttApiKey(provider),
+        });
+        if (result.ok && result.text) {
+          transcript = result.text;
+          dl.attachment.transcript = transcript;
+          this.log.info(`${kind} transcribed`, {
+            provider: result.provider,
+            chars: transcript.length,
+            preview: transcript.slice(0, 80),
+          });
+        } else {
+          sttError = result.error || "transcription failed";
+          this.log.warn(`${kind} transcription failed`, { error: sttError });
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.error(`${kind} download failed`, { error: msg });
+      sttError = `download failed: ${msg}`;
+    }
+
+    const text = voiceMessageText({
+      transcript,
+      caption: caption || undefined,
+      kind,
+      durationSec,
+      sttError,
+      localPath,
+    });
+
+    const msg = this.toIncoming(ctx, text, attachments.length ? attachments : undefined);
+    if (this.handler) await this.handler(msg);
   }
 
   private async handleMediaMessage(ctx: Context): Promise<void> {

@@ -151,6 +151,38 @@ export const ConfigSchema = z.object({
       level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     })
     .default({ level: "info" }),
+
+  /**
+   * Telegram voice / audio message speech-to-text.
+   * Uses OpenAI Whisper or Groq Whisper-compatible API.
+   */
+  voice: z
+    .object({
+      /** Download + attempt STT for voice notes (and audio when includeAudio) */
+      enabled: z.boolean().default(true),
+      /**
+       * STT backend:
+       * - auto: OPENAI_API_KEY → openai, else GROQ_API_KEY → groq, else download-only
+       * - openai: Whisper via api.openai.com (OPENAI_API_KEY)
+       * - groq: Whisper via api.groq.com (GROQ_API_KEY)
+       * - none: download only, no transcription
+       */
+      provider: z.enum(["auto", "openai", "groq", "none"]).default("auto"),
+      /** Whisper model id (openai: whisper-1; groq: whisper-large-v3-turbo) */
+      model: z.string().optional(),
+      /** Optional ISO-639-1 language hint (e.g. "en") */
+      language: z.string().optional(),
+      /** Also process Telegram audio file messages (not only voice notes) */
+      includeAudio: z.boolean().default(true),
+      /** Max download size for voice/audio */
+      maxBytes: z.number().default(20 * 1024 * 1024),
+    })
+    .default({
+      enabled: true,
+      provider: "auto",
+      includeAudio: true,
+      maxBytes: 20 * 1024 * 1024,
+    }),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema> & {
@@ -278,8 +310,9 @@ I am **${agentName}**, a personal AI agent that lives on the user's machine.
 - No surprise side effects on external accounts
 
 ## Voice
-- Short paragraphs
-- Use bullet lists when reporting multi-step work
+- Short paragraphs; phone-scannable on Telegram
+- Minimal markdown only: plain text, light bullets, sparse **bold**, \`code\` for paths/commands
+- No tables, heading stacks, or dense GitHub-flavored markdown in chat replies
 - Skip corporate filler ("Happy to help!", "Great question!")
 `,
     "USER.md": `# USER.md — About the User
@@ -330,7 +363,7 @@ Keep this lean. Move ephemeral detail to daily logs under memory/.
 - Respect Telegram allowlists / owner policy.
 
 ## Channels
-- Telegram replies should be scannable on a phone.
+- Telegram replies: scannable on a phone; minimal markdown (plain text, light bullets, sparse bold/code — no tables or heading stacks).
 - Use memory tools to persist facts the user asks you to remember.
 - Use cron tools for recurring jobs; confirm schedule in plain English.
 
@@ -406,6 +439,13 @@ DISK_AGENT_OWNER_ID=
 # Other providers (optional):
 # ANTHROPIC_API_KEY=
 # OPENAI_API_KEY=
+
+# Tavily web search / extract (web_search + web_fetch via @tavily/pi-extension):
+# TAVILY_API_KEY=tvly-...
+
+# Voice / audio STT (Telegram voice notes → Whisper transcript):
+# OPENAI_API_KEY=sk-...          # provider: openai | auto
+# GROQ_API_KEY=gsk_...           # provider: groq | auto (free-tier Whisper)
 
 # Model selection (provider/id):
 # DISK_AGENT_MODEL=supergrok/grok-4.5

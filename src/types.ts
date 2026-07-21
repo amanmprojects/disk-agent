@@ -35,6 +35,10 @@ export interface MessageAttachment {
   base64?: string;
   width?: number;
   height?: number;
+  /** Speech-to-text result for voice/audio messages */
+  transcript?: string;
+  /** Duration in seconds (Telegram voice/audio) */
+  durationSec?: number;
 }
 
 export interface OutgoingMessage {

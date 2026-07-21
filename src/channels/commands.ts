@@ -66,7 +66,7 @@ export function helpText(agentName: string): string {
     `/skills create`,
     ``,
     `*Just chat* for coding, browsing, cron setup, skills, etc.`,
-    `Tools: read, bash, edit, write, browser_*, memory_*, cron_*, skill_*, web_get.`,
+    `Tools: read, bash, edit, write, browser_*, memory_*, cron_*, skill_*, web_search, web_fetch, web_get.`,
   ];
   return lines.join("\n");
 }

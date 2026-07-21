@@ -35,16 +35,19 @@ That single `setup` wizard:
 2. Seeds workspace identity files + built-in skills
 3. **Prompts** for agent name, model, Telegram bot token (from [@BotFather](https://t.me/BotFather)), owner id, coding cwd
 4. Installs the **Pi** CLI if missing (`@earendil-works/pi-coding-agent`)
-5. Installs Pi extensions: **pi-supergrok**, **pi-agent-browser-native**
+5. Installs Pi extensions: **pi-supergrok**, **pi-agent-browser-native**, **@tavily/pi-extension**
 6. Installs **[agent-browser](https://agent-browser.dev/)** globally and runs `agent-browser install` (Chrome)
 7. Walks you through **SuperGrok / X Premium OAuth** (or skips if tokens / `XAI_API_KEY` already exist)
+
+For Tavily web search, set `TAVILY_API_KEY` in `~/.disk-agent/.env` (or the process env).
 
 Non-interactive (CI / scripted):
 
 ```bash
 disk-agent setup --yes --skip-login \
   --telegram-token "123456:ABC..." \
-  --owner "your_telegram_user_id"
+  --owner "your_telegram_user_id" \
+  --tavily-key "tvly-..."
 # later:
 disk-agent login
 ```
@@ -57,6 +60,7 @@ disk-agent setup \
   --model supergrok/grok-4.5 \
   --telegram-token "123456:ABC..." \
   --owner "your_telegram_user_id" \
+  --tavily-key "tvly-..."   # optional: Tavily web_search / web_fetch \
   --skip-browser   # optional: skip agent-browser
   --skip-login     # optional: skip SuperGrok OAuth
 ```
@@ -75,6 +79,7 @@ disk-agent status
 # secrets (if not passed to setup)
 $EDITOR ~/.disk-agent/.env
 # TELEGRAM_BOT_TOKEN=...
+# TAVILY_API_KEY=tvly-...
 
 # Detached (recommended on a VPS — survives logout)
 disk-agent gateway start
@@ -110,10 +115,10 @@ disk-agent setup
 
 | Area | What you get |
 |------|----------------|
-| **Telegram channel** | grammY long-polling bot, pairing / allowlist / owner policies, group mention gate, chunked replies |
+| **Telegram channel** | grammY long-polling bot, pairing / allowlist / owner policies, group mention gate, chunked replies, **voice notes** (Whisper STT) |
 | **Memory** | OpenClaw-style `SOUL.md` / `USER.md` / `MEMORY.md` / daily `memory/YYYY-MM-DD.md` + searchable fact store |
 | **Cron + heartbeat** | Cron expressions, `every 30m`, `daily at 09:00`, one-shots; quiet hours; `HEARTBEAT_OK` suppression |
-| **Browser / web** | `web_get` (fetch+HTML strip); full automation when [`agent-browser`](https://www.npmjs.com/package/agent-browser) is installed |
+| **Browser / web** | Tavily `web_search` / `web_fetch` (`@tavily/pi-extension`, needs `TAVILY_API_KEY`); `web_get` (fetch+HTML strip); full automation when [`agent-browser`](https://www.npmjs.com/package/agent-browser) is installed |
 | **Sessions** | Per-peer Pi session transcripts, `/new` reset, serialized lanes (no parallel tool conflicts) |
 | **Coding agent** | Full Pi toolset: read, bash, edit, write, grep, find, ls |
 | **Skills / identity** | Workspace + user skills under one home tree; bootstrap context each run |
@@ -273,6 +278,27 @@ logging:
 
 Environment overrides: `TELEGRAM_BOT_TOKEN`, `DISK_AGENT_OWNER_ID`, `DISK_AGENT_MODEL`, `DISK_AGENT_PROVIDER`, `DISK_AGENT_HOME`, `DISK_AGENT_WORKSPACE`, `DISK_AGENT_CWD`, `XAI_API_KEY`, plus other provider API keys.
 
+### Telegram voice messages
+
+Voice notes (and optional audio files) are downloaded, transcribed with Whisper, and sent to the agent as text.
+
+| Setting | Default | Notes |
+|---------|---------|--------|
+| `voice.enabled` | `true` | Set `false` to reject voice notes |
+| `voice.provider` | `auto` | `auto` picks OpenAI if `OPENAI_API_KEY` is set, else Groq if `GROQ_API_KEY`, else download-only |
+| `voice.model` | provider default | OpenAI: `whisper-1`; Groq: `whisper-large-v3-turbo` |
+| `voice.language` | unset | Optional ISO-639-1 hint (`en`, `es`, …) |
+| `voice.includeAudio` | `true` | Also process Telegram audio *file* messages |
+
+```bash
+# ~/.disk-agent/.env — pick one:
+OPENAI_API_KEY=sk-...
+# or free-tier Whisper:
+GROQ_API_KEY=gsk_...
+```
+
+Restart the gateway after changing env: `disk-agent gateway restart`.
+
 ## Agent tools
 
 Built-in (Pi): `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
@@ -281,7 +307,9 @@ Built-in (Pi): `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
 |------------|---------|
 | `memory_save` / `memory_search` / `memory_log` / `memory_delete` | Long-term + daily memory |
 | `cron_list` / `cron_add` / `cron_remove` / `cron_run` | Scheduler |
-| `web_get` | Fetch URL → text |
+| `web_search` | Tavily web search (`TAVILY_API_KEY`) |
+| `web_fetch` | Tavily extract from URLs |
+| `web_get` | Fetch URL → text (plain HTTP) |
 | `browser_open` / `snapshot` / `click` / `fill` / `screenshot` | Browser automation |
 | `session_list` / `session_reset` | Session management |
 | `skill_list` / `skill_load` / `skill_create` / … | Skills |

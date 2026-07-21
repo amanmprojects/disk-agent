@@ -144,8 +144,14 @@ export function describeAttachments(attachments: MessageAttachment[] | undefined
       const bits: string[] = [a.type];
       if (a.fileName) bits.push(a.fileName);
       if (a.mimeType) bits.push(a.mimeType);
+      if (a.durationSec != null) bits.push(`${a.durationSec}s`);
       if (a.localPath) bits.push(`saved:${a.localPath}`);
       if (a.base64) bits.push("vision:yes");
+      if (a.transcript) {
+        const t =
+          a.transcript.length > 120 ? `${a.transcript.slice(0, 117)}…` : a.transcript;
+        bits.push(`transcript:"${t}"`);
+      }
       return `- ${bits.join(" · ")}`;
     })
     .join("\n");

@@ -55,5 +55,15 @@ memory:
 security:
   bashGuard: true
 
+# Telegram voice notes / audio → Whisper STT (needs OPENAI_API_KEY or GROQ_API_KEY)
+voice:
+  enabled: true
+  provider: auto # auto | openai | groq | none
+  # model: whisper-1              # openai default
+  # model: whisper-large-v3-turbo # groq default
+  # language: en                  # optional ISO-639-1 hint
+  includeAudio: true
+  # maxBytes: 20971520
+
 logging:
   level: info

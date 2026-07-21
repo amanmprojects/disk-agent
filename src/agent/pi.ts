@@ -17,28 +17,51 @@ const require = createRequire(import.meta.url);
 let runtimePromise: Promise<ModelRuntime> | null = null;
 let bootstrapPromise: Promise<void> | null = null;
 
-/** Resolve pi-supergrok extension entry (registers SuperGrok OAuth provider). */
-export function resolveSupergrokExtension(): string | null {
+/**
+ * Resolve a pi package extension entry by npm package name + relative path.
+ * Checks require.resolve, project node_modules, and ~/.pi/agent/npm.
+ */
+export function resolvePiPackageExtension(
+  packageName: string,
+  relativeEntry: string,
+): string | null {
   const candidates: string[] = [];
   try {
-    const pkgJson = require.resolve("pi-supergrok/package.json");
-    candidates.push(join(dirname(pkgJson), "extensions/index.ts"));
+    const pkgJson = require.resolve(`${packageName}/package.json`);
+    candidates.push(join(dirname(pkgJson), relativeEntry));
   } catch {
     /* not resolvable via require */
   }
-  // Common install locations
   candidates.push(
-    join(process.cwd(), "node_modules/pi-supergrok/extensions/index.ts"),
-    join(getAgentDir(), "npm/node_modules/pi-supergrok/extensions/index.ts"),
+    join(process.cwd(), "node_modules", packageName, relativeEntry),
+    join(getAgentDir(), "npm/node_modules", packageName, relativeEntry),
     join(
       process.env.HOME || "",
-      ".pi/agent/npm/node_modules/pi-supergrok/extensions/index.ts",
+      ".pi/agent/npm/node_modules",
+      packageName,
+      relativeEntry,
     ),
   );
   for (const c of candidates) {
     if (c && existsSync(c)) return c;
   }
   return null;
+}
+
+/** Resolve pi-supergrok extension entry (registers SuperGrok OAuth provider). */
+export function resolveSupergrokExtension(): string | null {
+  return resolvePiPackageExtension("pi-supergrok", "extensions/index.ts");
+}
+
+/** Resolve @tavily/pi-extension entry (registers web_search + web_fetch). */
+export function resolveTavilyExtension(): string | null {
+  return resolvePiPackageExtension("@tavily/pi-extension", "index.ts");
+}
+
+/** All extension entry paths disk-agent should load into each agent session. */
+export function resolveAgentExtensionPaths(): string[] {
+  const paths = [resolveSupergrokExtension(), resolveTavilyExtension()];
+  return paths.filter((p): p is string => Boolean(p));
 }
 
 /**

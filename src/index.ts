@@ -10,9 +10,18 @@ export {
   getSharedModelRuntime,
   resolveModel,
   resolveSupergrokExtension,
+  resolveTavilyExtension,
+  resolveAgentExtensionPaths,
   piAgentDir,
 } from "./agent/pi.js";
 export { TelegramChannel } from "./channels/telegram.js";
+export {
+  transcribeAudio,
+  resolveSttProvider,
+  voiceMessageText,
+  type SttProvider,
+  type TranscribeResult,
+} from "./voice/transcribe.js";
 export { SkillsStore, seedBuiltinSkills } from "./skills/store.js";
 export {
   getPaths,
