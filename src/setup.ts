@@ -108,10 +108,6 @@ function warn(msg: string): void {
   console.log(chalk.yellow("  ⚠ ") + msg);
 }
 
-function info(msg: string): void {
-  console.log(chalk.dim("  · ") + msg);
-}
-
 function fail(msg: string): void {
   console.log(chalk.red("  ✗ ") + msg);
 }
@@ -245,7 +241,6 @@ export async function ensurePi(opts?: { skipGlobalInstall?: boolean }): Promise<
     return { binary: null, installed: false, detail: "pi not found (skipped install)" };
   }
 
-  info("pi not on PATH — installing @earendil-works/pi-coding-agent globally…");
   const npm = runCmd("npm", ["install", "-g", "@earendil-works/pi-coding-agent"]);
   if (!npm.ok) {
     binary = resolvePiBinary();
@@ -322,13 +317,12 @@ export function ensurePiPackages(
 
   for (const pkg of packages) {
     if (packageListed(current, pkg)) {
-      info(`${pkg} already in pi settings`);
+      ok(`${pkg} already in pi settings`);
       installed.push(pkg);
       continue;
     }
 
     if (piBinary) {
-      info(`pi install ${pkg}`);
       const isJs = piBinary.endsWith(".js");
       const result = isJs
         ? runNode(piBinary, ["install", pkg])
@@ -392,7 +386,6 @@ export async function ensureAgentBrowser(opts?: {
   let cli = whichCmd("agent-browser");
 
   if (!cli) {
-    info("agent-browser not on PATH — installing globally (https://agent-browser.dev/)…");
     const npm = runCmd("npm", ["install", "-g", "agent-browser"]);
     if (!npm.ok) {
       return {
@@ -426,7 +419,6 @@ export async function ensureAgentBrowser(opts?: {
   }
 
   // Download Chrome / browser backend for first-time use
-  info("Running agent-browser install (download Chrome if needed)…");
   const install = runCmd(cli, ["install"], { timeoutMs: 600_000 });
   if (install.ok) {
     ok("browser backend ready (Chrome)");
@@ -561,7 +553,7 @@ async function collectUserConfig(
   console.log(chalk.dim("  Telegram (optional — from @BotFather: https://t.me/BotFather)"));
   let telegramToken = existingToken;
   if (existingToken) {
-    info(`existing token detected (${maskSecret(existingToken)})`);
+    ok(`telegram:  existing token detected (${maskSecret(existingToken)})`);
     if (await confirm("Replace Telegram bot token?", false)) {
       telegramToken = await ask("TELEGRAM_BOT_TOKEN", { secret: true });
     }
@@ -589,7 +581,7 @@ async function collectUserConfig(
   );
   let tavilyApiKey = existingTavily;
   if (existingTavily) {
-    info(`existing Tavily key detected (${maskSecret(existingTavily)})`);
+    ok(`tavily:    existing key detected (${maskSecret(existingTavily)})`);
     if (await confirm("Replace Tavily API key?", false)) {
       tavilyApiKey = await ask("TAVILY_API_KEY", { secret: true });
     }
@@ -635,7 +627,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   ok(`workspace: ${paths.workspace}`);
   ok(`config:    ${paths.configFile}`);
   ok(`skills:    ${paths.workspaceSkills} (workspace), ${paths.userSkills} (user)`);
-  info(
+  ok(
     "layout:\n" +
       describeLayout(paths)
         .split("\n")
@@ -702,7 +694,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   }
 
   const agentDir = resolvePiAgentDir();
-  info(`pi agent dir: ${agentDir}`);
+  ok(`pi agent dir: ${agentDir}`);
 
   // ── 4. Pi extensions ────────────────────────────────────────────────────
   step(4, total, "Install Pi extensions (pi-supergrok, pi-agent-browser-native, …)");
@@ -750,8 +742,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     browserResult.detail = "skipped (--skip-browser)";
   } else if (opts.yes) {
     browserResult = await ensureAgentBrowser();
+    // Success lines already printed by ensureAgentBrowser
     if (!browserResult.installed) fail(browserResult.detail);
-    else info(browserResult.detail);
   } else {
     const want =
       browserResult.installed ||
@@ -761,8 +753,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       ));
     if (want) {
       browserResult = await ensureAgentBrowser();
+      // Success lines already printed by ensureAgentBrowser
       if (!browserResult.installed) fail(browserResult.detail);
-      else info(browserResult.detail);
     } else {
       warn("skipped agent-browser — web_get will use plain fetch only");
       browserResult.detail = "skipped by user";
@@ -797,12 +789,12 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       if (result.ok) ok(authDetail);
       else {
         fail(authDetail);
-        info("You can retry later: disk-agent login");
-        info(`Or set XAI_API_KEY in ${paths.envFile}`);
+        console.log(chalk.dim("    You can retry later: disk-agent login"));
+        console.log(chalk.dim(`    Or set XAI_API_KEY in ${paths.envFile}`));
       }
     } else {
       authDetail = "deferred — run disk-agent login when ready";
-      info(authDetail);
+      warn(authDetail);
       if (process.env.XAI_API_KEY || readEnvValue(paths.envFile, "XAI_API_KEY")) {
         authOk = true;
         ok("XAI_API_KEY present");
