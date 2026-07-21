@@ -180,24 +180,36 @@ export class AgentRuntime {
           }
 
           if (captureThoughts) {
-            if (ev.type === "thinking_start") {
-              thinkingBuffers.set(ev.contentIndex ?? 0, []);
+            if (ev.type === "thinking_start" || ev.type === "reasoning_start") {
+              const idx = ev.contentIndex ?? 0;
+              if (!thinkingBuffers.has(idx)) {
+                thinkingBuffers.set(idx, []);
+                emit({ kind: "thinking_start" });
+              }
             }
             if (
               (ev.type === "thinking_delta" || ev.type === "reasoning_delta") &&
               ev.delta
             ) {
               const idx = ev.contentIndex ?? 0;
-              const buf = thinkingBuffers.get(idx) ?? [];
+              // Some models stream deltas without an explicit start event
+              if (!thinkingBuffers.has(idx)) {
+                thinkingBuffers.set(idx, []);
+                emit({ kind: "thinking_start" });
+              }
+              const buf = thinkingBuffers.get(idx)!;
               buf.push(ev.delta);
-              thinkingBuffers.set(idx, buf);
             }
             if (ev.type === "thinking_end" || ev.type === "reasoning_end") {
               const idx = ev.contentIndex ?? 0;
               const fromEnd = (ev.content ?? "").trim();
               const fromBuf = (thinkingBuffers.get(idx) ?? []).join("").trim();
+              const hadBuf = thinkingBuffers.has(idx);
               thinkingBuffers.delete(idx);
               const thought = fromEnd || fromBuf;
+              if (hadBuf || thought) {
+                emit({ kind: "thinking_end" });
+              }
               if (thought) {
                 completedThoughts.push(thought);
                 emit({ kind: "thought", text: thought });
@@ -274,6 +286,7 @@ export class AgentRuntime {
       // Flush leftover thinking buffers that never got thinking_end
       if (captureThoughts && thinkingBuffers.size) {
         for (const [, parts] of thinkingBuffers) {
+          emit({ kind: "thinking_end" });
           const t = parts.join("").trim();
           if (!t) continue;
           completedThoughts.push(t);
@@ -954,14 +967,16 @@ Do:
 - **bold** sparingly for emphasis or short labels
 - \`inline code\` for commands, paths, ids, and keys
 - Fenced code blocks only for multi-line code or log snippets that must stay monospaced
+- For multi-column data, use short bullets or \`Label: value\` lines — never a table
 
 Do not:
-- Write dense GitHub-flavored markdown (tables, nested headings, task lists, HTML)
+- **Never use markdown tables** (\`| col | col |\` / \`|---|\`). Telegram does not render them well; always rewrite as bullets or plain lines.
+- Write dense GitHub-flavored markdown (nested headings, task lists, HTML)
 - Use # / ## headings — they look noisy in chat; use a short bold label line instead if needed
 - Stack decorations (bold+italic+code), long horizontal rules, or decorative emoji walls
 - Dump huge code fences or walls of structured markdown when a short summary will do
 
-When channel is telegram: keep answers scannable — lead with the answer, then brief detail. For CLI you may be slightly longer, but still avoid heavy markdown.
+When channel is telegram: keep answers scannable — lead with the answer, then brief detail. For CLI you may be slightly longer, but still no tables and no heavy markdown.
 
 ## Operating principles
 1. Be useful and autonomous. Prefer taking action with tools over asking endless questions.

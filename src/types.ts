@@ -57,6 +57,8 @@ export interface OutgoingMessage {
 
 /** Live progress events emitted during an agent turn */
 export type LiveProgressEvent =
+  | { kind: "thinking_start" }
+  | { kind: "thinking_end" }
   | { kind: "thought"; text: string }
   | { kind: "tool_start"; id: string; name: string; args: string }
   | {

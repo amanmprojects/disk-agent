@@ -20,18 +20,24 @@ import { helpText } from "./channels/commands.js";
 import { ALL_AGENT_TOOL_NAMES } from "./agent/tools.js";
 import {
   formatStepsMode,
-  parseOnOff,
+  formatThoughtsMode,
+  formatVerboseMode,
   parseStepsMode,
+  parseThoughtsMode,
+  parseVerboseMode,
+  prefsForVerbose,
   PrefsStore,
   stepsEnabled,
+  thoughtsEnabled,
   type PeerPrefs,
 } from "./prefs.js";
 import {
   formatCronHtml,
   formatFinalHtml,
+  formatThinkingIndicatorHtml,
   formatThoughtHtml,
-  formatToolCallHtml,
   formatToolDoneHtml,
+  formatToolNameHtml,
   formatToolRunningHtml,
   markdownToTelegramHtml,
 } from "./format/telegram.js";
@@ -132,9 +138,13 @@ export class Gateway {
       const prefs = this.prefs.get(peerKey);
 
       // Live stream progress:
-      //  - thoughts → grey blockquote message when each thought finishes
-      //  - tools → one message per tool, edited from "running…" → result
+      //  - thoughts on → grey blockquote when each thought finishes
+      //  - thoughts minimal → italic "Thinking…" while reasoning, then delete
+      //  - tools on → one message per tool, edited from "running…" → result
+      //  - tools minimal → tool name only (no params / results)
       const toolMsgIds = new Map<string, number>();
+      let thinkingDepth = 0;
+      let thinkingMsgId: number | undefined;
       let deliverChain: Promise<void> = Promise.resolve();
 
       const queueLive = (fn: () => Promise<void>) => {
@@ -150,19 +160,55 @@ export class Gateway {
       };
 
       const showSteps = stepsEnabled(prefs.showSteps);
+      const showThoughts = thoughtsEnabled(prefs.showThoughts);
+      const isTg = msg.channel === "telegram";
+
+      const clearThinkingIndicator = async () => {
+        if (thinkingMsgId == null) return;
+        const id = thinkingMsgId;
+        thinkingMsgId = undefined;
+        if (isTg && msg.chatId) {
+          await this.telegram.deleteMessage(msg.chatId, id);
+        }
+      };
 
       const onProgress =
-        prefs.showThoughts || showSteps
+        showThoughts || showSteps
           ? async (ev: LiveProgressEvent) => {
               await queueLive(async () => {
+                if (ev.kind === "thinking_start") {
+                  if (prefs.showThoughts !== "minimal") return;
+                  thinkingDepth += 1;
+                  if (thinkingDepth === 1 && thinkingMsgId == null) {
+                    const id = await this.deliver({
+                      channel: msg.channel,
+                      peerId: msg.peerId,
+                      chatId: msg.chatId,
+                      text: isTg ? formatThinkingIndicatorHtml() : "Thinking…",
+                      parseMode: isTg ? "HTML" : undefined,
+                      silent: true,
+                    });
+                    if (typeof id === "number") thinkingMsgId = id;
+                  }
+                  return;
+                }
+
+                if (ev.kind === "thinking_end") {
+                  if (prefs.showThoughts !== "minimal") return;
+                  thinkingDepth = Math.max(0, thinkingDepth - 1);
+                  if (thinkingDepth === 0) await clearThinkingIndicator();
+                  return;
+                }
+
                 if (ev.kind === "thought") {
-                  if (!prefs.showThoughts) return;
+                  // Full thoughts mode only — minimal uses the indicator above
+                  if (prefs.showThoughts !== "on") return;
                   await this.deliver({
                     channel: msg.channel,
                     peerId: msg.peerId,
                     chatId: msg.chatId,
-                    text: formatThoughtHtml(ev.text),
-                    parseMode: msg.channel === "telegram" ? "HTML" : undefined,
+                    text: isTg ? formatThoughtHtml(ev.text) : ev.text,
+                    parseMode: isTg ? "HTML" : undefined,
                     silent: true,
                   });
                   return;
@@ -171,17 +217,25 @@ export class Gateway {
                 if (!showSteps) return;
 
                 if (ev.kind === "tool_start") {
-                  // minimal: call only; on: running… then edit with result
+                  // Clear thinking indicator so tool lines stay tidy
+                  if (prefs.showThoughts === "minimal") {
+                    thinkingDepth = 0;
+                    await clearThinkingIndicator();
+                  }
+                  // minimal: name only; on: running… then edit with result
                   const html =
                     prefs.showSteps === "minimal"
-                      ? formatToolCallHtml(ev.name, ev.args)
+                      ? formatToolNameHtml(ev.name)
                       : formatToolRunningHtml(ev.name, ev.args);
                   const id = await this.deliver({
                     channel: msg.channel,
                     peerId: msg.peerId,
                     chatId: msg.chatId,
-                    text: html,
-                    parseMode: msg.channel === "telegram" ? "HTML" : undefined,
+                    text:
+                      prefs.showSteps === "minimal" && !isTg
+                        ? `⚙ ${ev.name}`
+                        : html,
+                    parseMode: isTg ? "HTML" : undefined,
                     silent: true,
                   });
                   if (prefs.showSteps === "on" && typeof id === "number") {
@@ -199,7 +253,7 @@ export class Gateway {
                     peerId: msg.peerId,
                     chatId: msg.chatId,
                     text: html,
-                    parseMode: msg.channel === "telegram" ? "HTML" : undefined,
+                    parseMode: isTg ? "HTML" : undefined,
                     silent: true,
                     editMessageId: existing,
                   });
@@ -214,23 +268,31 @@ export class Gateway {
           msg.channel === "telegram"
             ? { channel: "telegram", peerId: msg.peerId, chatId: msg.chatId }
             : undefined,
-        captureThoughts: prefs.showThoughts,
+        captureThoughts: showThoughts,
         captureSteps: showSteps,
         onProgress,
       });
 
       // Wait for any in-flight live messages before the final answer
       await deliverChain;
+      // Safety: drop a leftover Thinking… bubble before the final reply
+      if (prefs.showThoughts === "minimal") {
+        thinkingDepth = 0;
+        await clearThinkingIndicator();
+      }
 
       const bare = result.text?.trim() || "(no response)";
       // Suppress heartbeat OK
       const suppress = bare === "HEARTBEAT_OK" || bare.startsWith("HEARTBEAT_OK\n");
 
+      // Duration / tool-count footer only for full verbose (/verbose on)
+      const showMeta = prefs.showSteps === "on" || prefs.showThoughts === "on";
+
       const text =
         msg.channel === "telegram"
           ? formatFinalHtml(
               bare,
-              showSteps || prefs.showThoughts
+              showMeta
                 ? { durationMs: result.durationMs, toolCalls: result.toolCalls }
                 : undefined,
             )
@@ -614,13 +676,19 @@ export class Gateway {
       case "think": {
         const peerKey = makeSessionKey(msg.channel, msg.peerId);
         const cur = this.prefs.get(peerKey);
-        const v = parseOnOff(arg);
-        if (v === null && !arg) {
-          return `Thoughts (model reasoning): ${cur.showThoughts ? "ON" : "OFF"}\nUsage: /thoughts on|off`;
+        const mode = parseThoughtsMode(arg);
+        if (mode === null && !arg) {
+          return `Thoughts (model reasoning): ${formatThoughtsMode(cur.showThoughts)}\nUsage: /thoughts on|off|minimal`;
         }
-        if (v === null) return "Usage: /thoughts on|off";
-        const next = this.prefs.set(peerKey, { showThoughts: v });
-        return `Thoughts ${next.showThoughts ? "ON" : "OFF"} — I'll ${next.showThoughts ? "send each thought as its own message when it finishes" : "hide model reasoning"}.`;
+        if (mode === null) return "Usage: /thoughts on|off|minimal";
+        const next = this.prefs.set(peerKey, { showThoughts: mode });
+        const desc =
+          next.showThoughts === "on"
+            ? "send each thought as its own message when it finishes"
+            : next.showThoughts === "minimal"
+              ? 'show italic "Thinking…" while reasoning tokens stream'
+              : "hide model reasoning";
+        return `Thoughts ${formatThoughtsMode(next.showThoughts)} — I'll ${desc}.`;
       }
 
       case "steps":
@@ -638,7 +706,7 @@ export class Gateway {
           next.showSteps === "on"
             ? "send each tool call (and its result) as its own message as it happens"
             : next.showSteps === "minimal"
-              ? "send each tool call as its own message (no results)"
+              ? "send each tool name as its own message (no parameters or results)"
               : "hide tool activity";
         return `Steps ${formatStepsMode(next.showSteps)} — I'll ${desc}.`;
       }
@@ -647,19 +715,20 @@ export class Gateway {
       case "debug": {
         const peerKey = makeSessionKey(msg.channel, msg.peerId);
         const cur = this.prefs.get(peerKey);
-        const v = parseOnOff(arg);
-        if (v === null && !arg) {
+        const mode = parseVerboseMode(arg);
+        if (mode === null && !arg) {
+          return ["Verbose display prefs:", this.prefs.format(cur)].join("\n");
+        }
+        if (mode === null) {
           return [
-            "Verbose display prefs:",
-            this.prefs.format(cur),
+            "Usage: /verbose on|off|minimal",
+            "  on      — full thoughts + full tool steps",
+            "  minimal — Thinking… indicator + tool names only",
+            "  off     — hide both",
           ].join("\n");
         }
-        if (v === null) return "Usage: /verbose on|off\n(turns both thoughts + full steps together)";
-        const next = this.prefs.set(peerKey, {
-          showThoughts: v,
-          showSteps: v ? "on" : "off",
-        });
-        return `Verbose ${v ? "ON" : "OFF"}\n${this.prefs.format(next)}`;
+        const next = this.prefs.set(peerKey, prefsForVerbose(mode));
+        return `Verbose ${formatVerboseMode(mode)}\n${this.prefs.format(next)}`;
       }
 
       case "prefs":
@@ -690,7 +759,8 @@ function composeFinalReply(
   result: AgentRunResult,
   prefs: PeerPrefs,
 ): string {
-  if (!(stepsEnabled(prefs.showSteps) || prefs.showThoughts)) return answer;
+  // Duration / tool-count footer only for full verbose (/verbose on)
+  if (!(prefs.showSteps === "on" || prefs.showThoughts === "on")) return answer;
   const meta = [`${result.durationMs}ms`];
   if (result.toolCalls) meta.push(`${result.toolCalls} tools`);
   return `${answer}

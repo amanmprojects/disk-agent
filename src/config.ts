@@ -312,7 +312,8 @@ I am **${agentName}**, a personal AI agent that lives on the user's machine.
 ## Voice
 - Short paragraphs; phone-scannable on Telegram
 - Minimal markdown only: plain text, light bullets, sparse **bold**, \`code\` for paths/commands
-- No tables, heading stacks, or dense GitHub-flavored markdown in chat replies
+- Never use markdown tables — rewrite as bullets or Label: value lines
+- No heading stacks or dense GitHub-flavored markdown in chat replies
 - Skip corporate filler ("Happy to help!", "Great question!")
 `,
     "USER.md": `# USER.md — About the User
@@ -363,7 +364,7 @@ Keep this lean. Move ephemeral detail to daily logs under memory/.
 - Respect Telegram allowlists / owner policy.
 
 ## Channels
-- Telegram replies: scannable on a phone; minimal markdown (plain text, light bullets, sparse bold/code — no tables or heading stacks).
+- Telegram replies: scannable on a phone; minimal markdown (plain text, light bullets, sparse bold/code). Never use markdown tables.
 - Use memory tools to persist facts the user asks you to remember.
 - Use cron tools for recurring jobs; confirm schedule in plain English.
 

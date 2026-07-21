@@ -66,15 +66,25 @@ export function formatThoughtHtml(thought: string): string {
   return `<blockquote expandable>${body}</blockquote>`;
 }
 
+/** Minimal thoughts mode — indicator while reasoning tokens stream. */
+export function formatThinkingIndicatorHtml(): string {
+  return "<i>Thinking…</i>";
+}
+
 function meaningfulArgs(args: string): string {
   const a = args.trim();
   if (!a || a === "{}" || a === "null" || a === "undefined") return "";
   return a;
 }
 
-/** Tool call only (minimal steps mode) — no running/result status. */
+/** Tool name only (minimal steps / verbose minimal). */
+export function formatToolNameHtml(name: string): string {
+  return `<b>⚙ ${escapeHtml(name)}</b>`;
+}
+
+/** Tool call with optional args — used by full steps mode. */
 export function formatToolCallHtml(name: string, args: string): string {
-  const title = `<b>⚙ ${escapeHtml(name)}</b>`;
+  const title = formatToolNameHtml(name);
   const a = meaningfulArgs(args);
   const argLine = a ? `\n<code>${escapeHtml(clip(a, 500))}</code>` : "";
   return `${title}${argLine}`;

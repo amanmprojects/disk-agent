@@ -345,6 +345,20 @@ Type / for command suggestions, or /help for the full list.`,
     }
   }
 
+  /** Delete a previously sent message (e.g. clear Thinking… indicator). */
+  async deleteMessage(chatId: string, messageId: number): Promise<void> {
+    if (!this.bot) return;
+    try {
+      await this.bot.api.deleteMessage(chatId, messageId);
+    } catch (err) {
+      this.log.debug("deleteMessage failed", {
+        error: err instanceof Error ? err.message : String(err),
+        chatId,
+        messageId,
+      });
+    }
+  }
+
   // ── Auth / pairing ────────────────────────────────────────────
 
   getAllowlist(): string[] {
