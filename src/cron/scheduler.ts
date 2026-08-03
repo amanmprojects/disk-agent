@@ -1,5 +1,5 @@
-import { Cron } from "croner";
 import { join } from "node:path";
+import { Cron } from "croner";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { CronJob, CronSchedule, IncomingMessage } from "../types.js";
@@ -68,7 +68,10 @@ export class CronScheduler {
     return job;
   }
 
-  update(id: string, patch: Partial<Pick<CronJob, "name" | "prompt" | "enabled" | "schedule" | "deliver" | "model">>): CronJob | undefined {
+  update(
+    id: string,
+    patch: Partial<Pick<CronJob, "name" | "prompt" | "enabled" | "schedule" | "deliver" | "model">>,
+  ): CronJob | undefined {
     const job = this.jobs.get(id);
     if (!job) return undefined;
     if (patch.name !== undefined) job.name = patch.name;
@@ -76,7 +79,8 @@ export class CronScheduler {
     if (patch.enabled !== undefined) job.enabled = patch.enabled;
     if (patch.deliver !== undefined) job.deliver = patch.deliver;
     if (patch.model !== undefined) job.model = patch.model;
-    if (patch.schedule !== undefined) job.schedule = normalizeSchedule(patch.schedule as CronSchedule | string);
+    if (patch.schedule !== undefined)
+      job.schedule = normalizeSchedule(patch.schedule as CronSchedule | string);
     job.updatedAt = nowIso();
     this.jobs.set(id, job);
     this.persist();
@@ -228,7 +232,9 @@ export class CronScheduler {
         "If nothing needs the user's attention, reply with exactly HEARTBEAT_OK and nothing else.",
       deliver: {
         channel: "telegram",
-        peerId: this.cfg.telegram.ownerId ? `telegram:${this.cfg.telegram.ownerId}` : "system:heartbeat",
+        peerId: this.cfg.telegram.ownerId
+          ? `telegram:${this.cfg.telegram.ownerId}`
+          : "system:heartbeat",
         chatId: this.cfg.telegram.ownerId,
       },
       createdAt: nowIso(),
@@ -252,7 +258,8 @@ export function normalizeSchedule(input: CronSchedule | string): CronSchedule {
   if (everyMatch) {
     const n = Number(everyMatch[1]);
     const u = everyMatch[2]!.toLowerCase();
-    const mult = u === "ms" ? 1 : u === "s" ? 1000 : u === "m" ? 60_000 : u === "h" ? 3_600_000 : 86_400_000;
+    const mult =
+      u === "ms" ? 1 : u === "s" ? 1000 : u === "m" ? 60_000 : u === "h" ? 3_600_000 : 86_400_000;
     return { kind: "every", everyMs: n * mult };
   }
 

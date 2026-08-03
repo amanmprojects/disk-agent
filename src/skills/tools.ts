@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import type { SkillsStore, SkillScope } from "./store.js";
+import { Type } from "typebox";
+import type { SkillScope, SkillsStore } from "./store.js";
 
 export function createSkillTools(store: SkillsStore) {
   const skill_list = defineTool({
@@ -73,11 +73,7 @@ export function createSkillTools(store: SkillsStore) {
         description: "Markdown instructions WITHOUT yaml frontmatter",
       }),
       scope: Type.Optional(
-        Type.Union([
-          Type.Literal("workspace"),
-          Type.Literal("project"),
-          Type.Literal("user"),
-        ]),
+        Type.Union([Type.Literal("workspace"), Type.Literal("project"), Type.Literal("user")]),
       ),
       force: Type.Optional(Type.Boolean({ description: "Overwrite if exists" })),
     }),
@@ -123,11 +119,7 @@ export function createSkillTools(store: SkillsStore) {
     parameters: Type.Object({
       name: Type.String(),
       scope: Type.Optional(
-        Type.Union([
-          Type.Literal("workspace"),
-          Type.Literal("project"),
-          Type.Literal("user"),
-        ]),
+        Type.Union([Type.Literal("workspace"), Type.Literal("project"), Type.Literal("user")]),
       ),
     }),
     async execute(_id, params) {
@@ -202,9 +194,7 @@ export function createSkillTools(store: SkillsStore) {
         content: [
           {
             type: "text" as const,
-            text:
-              text +
-              "\n\nRun skill_list to verify. New skills load on the next agent turn.",
+            text: text + "\n\nRun skill_list to verify. New skills load on the next agent turn.",
           },
         ],
         details: result,

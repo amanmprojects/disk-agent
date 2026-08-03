@@ -1,23 +1,11 @@
 #!/usr/bin/env node
-import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { Command } from "commander";
+import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
-import {
-  bootstrapHome,
-  loadConfig,
-  initProjectConfig,
-  type AppConfig,
-} from "./config.js";
-import { Gateway } from "./gateway.js";
-import { describeSchedule } from "./cron/scheduler.js";
-import { nowIso } from "./utils.js";
-import type { IncomingMessage } from "./types.js";
-import { runSetup, runDoctor } from "./setup.js";
+import { Command } from "commander";
 import { loginProvider } from "./auth/login.js";
-import { getVersion } from "./version.js";
-import { describeLayout, getPaths } from "./paths.js";
-import { SessionRegistry } from "./session/manager.js";
+import { type AppConfig, bootstrapHome, initProjectConfig, loadConfig } from "./config.js";
+import { describeSchedule } from "./cron/scheduler.js";
 import {
   getDaemonStatus,
   restartDaemon,
@@ -25,7 +13,14 @@ import {
   stopDaemon,
   writeRuntimePid,
 } from "./daemon.js";
+import { Gateway } from "./gateway.js";
+import { describeLayout, getPaths } from "./paths.js";
+import { SessionRegistry } from "./session/manager.js";
+import { runDoctor, runSetup } from "./setup.js";
+import type { IncomingMessage } from "./types.js";
 import { runUpdate } from "./update.js";
+import { nowIso } from "./utils.js";
+import { getVersion } from "./version.js";
 
 const VERSION = getVersion();
 
@@ -46,10 +41,7 @@ program
   .option("--workspace <path>", "Override workspace directory")
   .option("--telegram-token <token>", "Set Telegram bot token (skips prompt)")
   .option("--owner <id>", "Telegram owner user id")
-  .option(
-    "--tavily-key <key>",
-    "Set Tavily API key for web_search / web_fetch (skips prompt)",
-  )
+  .option("--tavily-key <key>", "Set Tavily API key for web_search / web_fetch (skips prompt)")
   .option("--model <provider/id>", "Default model, e.g. supergrok/grok-4.5")
   .option("--cwd <path>", "Default coding tools working directory")
   .option("--skip-pi", "Skip installing pi CLI and Pi extensions")
@@ -57,10 +49,7 @@ program
   .option("--skip-login", "Skip SuperGrok OAuth login")
   .option("--login", "Force SuperGrok login (even with --yes)")
   .option("--force-login", "Re-run OAuth even if already authenticated")
-  .option(
-    "-y, --yes",
-    "Non-interactive: no prompts; install defaults; skip login unless --login",
-  )
+  .option("-y, --yes", "Non-interactive: no prompts; install defaults; skip login unless --login")
   .option(
     "--package <spec>",
     "Extra pi package to install (repeatable), e.g. npm:pi-supergrok",
@@ -134,13 +123,8 @@ program
 
 program
   .command("update")
-  .description(
-    "Update @amanm/disk-agent to the latest (or given) version and restart the gateway",
-  )
-  .argument(
-    "[version]",
-    "Version or dist-tag (default: latest). Examples: latest, 1.2.0, v1.2.0",
-  )
+  .description("Update @amanm/disk-agent to the latest (or given) version and restart the gateway")
+  .argument("[version]", "Version or dist-tag (default: latest). Examples: latest, 1.2.0, v1.2.0")
   .option("--check", "Only check for a newer version; do not install or restart")
   .option("--no-restart", "Update the package but do not stop/start the gateway")
   .option("--data-dir <path>", "Override home directory")
@@ -199,9 +183,7 @@ program
 
 const gatewayCmd = program
   .command("gateway")
-  .description(
-    "Gateway process: run (foreground), start/stop (detached OS daemon for VPS)",
-  )
+  .description("Gateway process: run (foreground), start/stop (detached OS daemon for VPS)")
   .option("--data-dir <path>", "Override data directory")
   .option("--workspace <path>", "Override workspace directory")
   .option("--cwd <path>", "Coding tools working directory");
@@ -343,9 +325,7 @@ program
     cfg.telegram.enabled = false;
     const gw = new Gateway(cfg);
     // Start cron only
-    gw.cron.setRunner((job) =>
-      gw.runCronJob(job).catch((e: unknown) => console.error(e)),
-    );
+    gw.cron.setRunner((job) => gw.runCronJob(job).catch((e: unknown) => console.error(e)));
     gw.cron.start();
 
     if (opts.resume) {
@@ -529,11 +509,7 @@ program
   .description("List, show history of, or resume conversation sessions")
   .option("--data-dir <path>", "Override data directory")
   .option("--workspace <path>", "Override workspace directory")
-  .argument(
-    "[action]",
-    "list | history | resume | files  (default: list)",
-    "list",
-  )
+  .argument("[action]", "list | history | resume | files  (default: list)", "list")
   .argument("[idOrKey]", "For history: peer key. For resume: session id or .jsonl path")
   .option("--key <peer>", "Peer key when resuming (e.g. cli:local, telegram:123)")
   .option("--limit <n>", "Max rows to print", "40")
@@ -682,9 +658,7 @@ program
       // disk-agent skills create <name> <description> <body...>
       const [name, description, ...bodyParts] = args;
       if (!name || !description || !bodyParts.length) {
-        console.error(
-          "Usage: disk-agent skills create <name> <description> <body markdown...>",
-        );
+        console.error("Usage: disk-agent skills create <name> <description> <body markdown...>");
         process.exit(1);
       }
       const r = gw.skills.create({

@@ -1,12 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AppConfig } from "../config.js";
-import type {
-  ChannelId,
-  SessionHistoryEntry,
-  SessionLookup,
-  SessionRecord,
-} from "../types.js";
+import type { ChannelId, SessionHistoryEntry, SessionLookup, SessionRecord } from "../types.js";
 import { ensureDir, hashKey, nowIso, readJson, uid, writeJson } from "../utils.js";
 
 const MAX_HISTORY = 50;
@@ -50,6 +45,9 @@ export class SessionRegistry {
   private indexPath: string;
   private sessionsDir: string;
   private piSessionsDir: string;
+  /** Parsed index cache, invalidated when the file's mtime changes. */
+  private cachedIndex: Record<string, SessionRecord> | null = null;
+  private cachedMtimeMs = -1;
 
   constructor(cfg: AppConfig) {
     this.sessionsDir = join(cfg.dataDir, "sessions");
@@ -59,24 +57,56 @@ export class SessionRegistry {
     ensureDir(this.piSessionsDir);
   }
 
-  list(): SessionRecord[] {
+  /**
+   * Read the session index, reusing the parsed cache when the file has not
+   * changed on disk. Callers mutate the returned object and pass it back to
+   * writeIndex(), which refreshes the cache.
+   */
+  private readIndex(): Record<string, SessionRecord> {
+    let mtimeMs = -1;
+    try {
+      mtimeMs = statSync(this.indexPath).mtimeMs;
+    } catch {
+      // Missing file — fall through to a fresh read (yields {}).
+    }
+    if (this.cachedIndex && mtimeMs >= 0 && mtimeMs === this.cachedMtimeMs) {
+      return this.cachedIndex;
+    }
     const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+    this.cachedIndex = idx;
+    this.cachedMtimeMs = mtimeMs;
+    return idx;
+  }
+
+  private writeIndex(idx: Record<string, SessionRecord>): void {
+    writeJson(this.indexPath, idx);
+    this.cachedIndex = idx;
+    try {
+      this.cachedMtimeMs = statSync(this.indexPath).mtimeMs;
+    } catch {
+      this.cachedIndex = null;
+      this.cachedMtimeMs = -1;
+    }
+  }
+
+  list(): SessionRecord[] {
+    const idx = this.readIndex();
     return Object.values(idx).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   get(key: string): SessionRecord | undefined {
-    const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+    const idx = this.readIndex();
     return idx[key];
   }
 
   getOrCreate(channel: ChannelId, peerId: string, title?: string): SessionRecord {
     const key = makeSessionKey(channel, peerId);
-    const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+    const idx = this.readIndex();
     const existing = idx[key];
     if (existing) {
       existing.updatedAt = nowIso();
       idx[key] = existing;
-      writeJson(this.indexPath, idx);
+      this.writeIndex(idx);
       return existing;
     }
     const rec: SessionRecord = {
@@ -91,35 +121,35 @@ export class SessionRegistry {
       history: [],
     };
     idx[key] = rec;
-    writeJson(this.indexPath, idx);
+    this.writeIndex(idx);
     ensureDir(this.peerDir(key));
     return rec;
   }
 
   touch(key: string, deltaMessages = 1, patch?: Partial<SessionRecord>): void {
-    const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+    const idx = this.readIndex();
     const rec = idx[key];
     if (!rec) return;
     rec.updatedAt = nowIso();
     rec.messageCount += deltaMessages;
     if (patch) Object.assign(rec, patch);
     idx[key] = rec;
-    writeJson(this.indexPath, idx);
+    this.writeIndex(idx);
   }
 
   setSessionFile(key: string, sessionFile: string, sessionId?: string): void {
-    const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+    const idx = this.readIndex();
     const rec = idx[key];
     if (!rec) return;
     rec.sessionFile = sessionFile;
     if (sessionId) rec.sessionId = sessionId;
     rec.updatedAt = nowIso();
     idx[key] = rec;
-    writeJson(this.indexPath, idx);
+    this.writeIndex(idx);
   }
 
   reset(key: string): SessionRecord | undefined {
-    const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+    const idx = this.readIndex();
     const rec = idx[key];
     if (!rec) return undefined;
     if (isArchivable(rec)) {
@@ -134,7 +164,7 @@ export class SessionRegistry {
       history: rec.history ?? [],
     };
     idx[key] = next;
-    writeJson(this.indexPath, idx);
+    this.writeIndex(idx);
     // New peer dir generation: bump by writing a marker file id into path via sessionId
     ensureDir(this.peerDir(key, next.sessionId));
     return next;
@@ -144,8 +174,11 @@ export class SessionRegistry {
    * Resume a previous (or still-active) session for a peer.
    * Archives the current active transcript first when switching away from it.
    */
-  resume(key: string, sessionIdOrPath: string): { ok: true; rec: SessionRecord } | { ok: false; error: string } {
-    const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+  resume(
+    key: string,
+    sessionIdOrPath: string,
+  ): { ok: true; rec: SessionRecord } | { ok: false; error: string } {
+    const idx = this.readIndex();
     const rec = idx[key];
     if (!rec) return { ok: false, error: `Unknown session key ${key}` };
 
@@ -153,7 +186,10 @@ export class SessionRegistry {
     if (!needle) return { ok: false, error: "Missing session id or path" };
 
     // Already active?
-    if (this.matchesId(rec.sessionId, needle) || (rec.sessionFile && this.matchesPath(rec.sessionFile, needle))) {
+    if (
+      this.matchesId(rec.sessionId, needle) ||
+      (rec.sessionFile && this.matchesPath(rec.sessionFile, needle))
+    ) {
       return { ok: true, rec };
     }
 
@@ -190,7 +226,7 @@ export class SessionRegistry {
     rec.messageCount = target.messageCount;
 
     idx[key] = rec;
-    writeJson(this.indexPath, idx);
+    this.writeIndex(idx);
     return { ok: true, rec };
   }
 
@@ -216,7 +252,7 @@ export class SessionRegistry {
         const peerId = parts.slice(1).join(":") || "local";
         this.getOrCreate(channel, peerId);
         // Inject into history then resume
-        const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+        const idx = this.readIndex();
         const rec = idx[key];
         if (!rec) return { ok: false, error: `Could not create peer ${key}` };
         const sid = this.sessionIdFromPath(path) ?? uid("sess");
@@ -230,7 +266,7 @@ export class SessionRegistry {
           archivedAt: nowIso(),
         });
         idx[key] = rec;
-        writeJson(this.indexPath, idx);
+        this.writeIndex(idx);
         return this.resume(key, sid);
       }
       return {
@@ -259,7 +295,9 @@ export class SessionRegistry {
         ok: false,
         error:
           `Ambiguous session id — matches:\n` +
-          matches.map((m) => `  ${m.sessionId}  ${m.key}  ${m.active ? "(active)" : "(archived)"}`).join("\n") +
+          matches
+            .map((m) => `  ${m.sessionId}  ${m.key}  ${m.active ? "(active)" : "(archived)"}`)
+            .join("\n") +
           `\nPass --key <peer> to disambiguate.`,
       };
     }
@@ -271,7 +309,7 @@ export class SessionRegistry {
   /** List archived transcripts (optionally for one peer). Most recent first. */
   listHistory(key?: string): Array<SessionLookup> {
     const out: SessionLookup[] = [];
-    const records = key ? [this.get(key)].filter(Boolean) as SessionRecord[] : this.list();
+    const records = key ? ([this.get(key)].filter(Boolean) as SessionRecord[]) : this.list();
     for (const rec of records) {
       for (const h of rec.history ?? []) {
         out.push({
@@ -301,7 +339,10 @@ export class SessionRegistry {
     if (!needle) return [];
     const out: SessionLookup[] = [];
     for (const rec of this.list()) {
-      if (this.matchesId(rec.sessionId, needle) || (rec.sessionFile && this.matchesPath(rec.sessionFile, needle))) {
+      if (
+        this.matchesId(rec.sessionId, needle) ||
+        (rec.sessionFile && this.matchesPath(rec.sessionFile, needle))
+      ) {
         out.push({
           key: rec.key,
           channel: rec.channel,
@@ -316,7 +357,10 @@ export class SessionRegistry {
         });
       }
       for (const h of rec.history ?? []) {
-        if (this.matchesId(h.sessionId, needle) || (h.sessionFile && this.matchesPath(h.sessionFile, needle))) {
+        if (
+          this.matchesId(h.sessionId, needle) ||
+          (h.sessionFile && this.matchesPath(h.sessionFile, needle))
+        ) {
           out.push({
             key: rec.key,
             channel: rec.channel,
@@ -378,10 +422,10 @@ export class SessionRegistry {
   }
 
   delete(key: string): boolean {
-    const idx = readJson<Record<string, SessionRecord>>(this.indexPath, {});
+    const idx = this.readIndex();
     if (!idx[key]) return false;
     delete idx[key];
-    writeJson(this.indexPath, idx);
+    this.writeIndex(idx);
     return true;
   }
 
@@ -417,7 +461,9 @@ export class SessionRegistry {
   private sessionIdFromPath(path: string): string | undefined {
     // Filenames look like: 2026-07-21T09-57-40-828Z_019f841c-155c-77b5-93ab-0e7fdbc0f439.jsonl
     const base = path.split(/[/\\]/).pop() ?? "";
-    const m = base.match(/_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
+    const m = base.match(
+      /_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i,
+    );
     if (m) return m[1];
     const m2 = base.match(/_(sess_[a-f0-9]+)\.jsonl$/i);
     if (m2) return m2[1];

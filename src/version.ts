@@ -1,7 +1,7 @@
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
 
 /** Fallback when package.json cannot be resolved (e.g. unusual packaging). */
 const FALLBACK_VERSION = "1.2.0";

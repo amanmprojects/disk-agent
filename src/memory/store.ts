@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { AppConfig } from "../config.js";
+import type { MemoryEntry } from "../types.js";
 import {
   appendText,
   ensureDir,
@@ -13,7 +14,6 @@ import {
   writeJson,
   writeText,
 } from "../utils.js";
-import type { MemoryEntry } from "../types.js";
 
 /**
  * OpenClaw/Hermes-style memory:
@@ -73,9 +73,23 @@ export class MemoryStore {
 
   deleteFact(id: string): boolean {
     const facts = this.listFacts();
-    const next = facts.filter((f) => f.id !== id);
-    if (next.length === facts.length) return false;
-    writeJson(this.factsPath, next);
+    const target = facts.find((f) => f.id === id);
+    if (!target) return false;
+    writeJson(
+      this.factsPath,
+      facts.filter((f) => f.id !== id),
+    );
+    // Remove the mirrored line from MEMORY.md
+    const mdPath = join(this.workspaceDir, "MEMORY.md");
+    const md = readText(mdPath);
+    if (md) {
+      const line = `- ${target.content}`;
+      const updated = md
+        .split("\n")
+        .filter((l) => l.trim() !== line.trim())
+        .join("\n");
+      if (updated !== md) writeText(mdPath, updated);
+    }
     return true;
   }
 

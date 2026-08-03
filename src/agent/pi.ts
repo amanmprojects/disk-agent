@@ -1,14 +1,14 @@
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { existsSync } from "node:fs";
 import {
+  type AgentSession,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
   SessionManager,
   SettingsManager,
-  type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../logger.js";
 
@@ -35,12 +35,7 @@ export function resolvePiPackageExtension(
   candidates.push(
     join(process.cwd(), "node_modules", packageName, relativeEntry),
     join(getAgentDir(), "npm/node_modules", packageName, relativeEntry),
-    join(
-      process.env.HOME || "",
-      ".pi/agent/npm/node_modules",
-      packageName,
-      relativeEntry,
-    ),
+    join(process.env.HOME || "", ".pi/agent/npm/node_modules", packageName, relativeEntry),
   );
   for (const c of candidates) {
     if (c && existsSync(c)) return c;
@@ -122,7 +117,10 @@ export async function bootstrapSupergrok(log?: Logger): Promise<{
     bootstrapPromise = (async () => {
       const modelRuntime = await getSharedModelRuntime(log);
       // Already registered?
-      if (modelRuntime.getProvider("supergrok") || modelRuntime.getRegisteredProviderIds().includes("supergrok")) {
+      if (
+        modelRuntime.getProvider("supergrok") ||
+        modelRuntime.getRegisteredProviderIds().includes("supergrok")
+      ) {
         log?.debug("supergrok already registered");
         return;
       }
@@ -266,7 +264,14 @@ export async function resolveModel(
     const list = await rt.listCredentials();
     creds =
       list
-        .map((c) => String((c as { providerId?: string; id?: string; provider?: string }).providerId ?? (c as { provider?: string }).provider ?? (c as { id?: string }).id ?? "?"))
+        .map((c) =>
+          String(
+            (c as { providerId?: string; id?: string; provider?: string }).providerId ??
+              (c as { provider?: string }).provider ??
+              (c as { id?: string }).id ??
+              "?",
+          ),
+        )
         .filter(Boolean)
         .join(", ") || "(none)";
   } catch {

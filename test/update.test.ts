@@ -1,6 +1,6 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { packageSpec, PACKAGE_NAME } from "../src/update.js";
+import { describe, it } from "node:test";
+import { PACKAGE_NAME, packageSpec } from "../src/update.js";
 
 describe("packageSpec", () => {
   it("defaults to @latest", () => {

@@ -95,10 +95,7 @@ export function resolveWorkspaceDir(home: string, explicit?: string): string {
 }
 
 /** Build the full standardized path map for a home (+ optional workspace override). */
-export function getPaths(opts?: {
-  home?: string;
-  workspace?: string;
-}): DiskAgentPaths {
+export function getPaths(opts?: { home?: string; workspace?: string }): DiskAgentPaths {
   const home = resolveHomeDir(opts?.home);
   const workspace = resolveWorkspaceDir(home, opts?.workspace);
 

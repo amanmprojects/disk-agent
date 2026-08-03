@@ -1,22 +1,21 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type AgentSession,
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
-  type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { AppConfig } from "../config.js";
 import type { BrowserService } from "../browser/service.js";
+import { attachmentsToImages, describeAttachments } from "../channels/media.js";
+import type { AppConfig } from "../config.js";
 import type { CronScheduler } from "../cron/scheduler.js";
 import type { Logger } from "../logger.js";
 import type { MemoryStore } from "../memory/store.js";
-import { SessionRegistry, makeSessionKey } from "../session/manager.js";
+import { makeSessionKey, type SessionRegistry } from "../session/manager.js";
 import type { SkillsStore } from "../skills/store.js";
 import type { AgentRunResult, ChannelId, IncomingMessage, LiveProgressEvent } from "../types.js";
-import { attachmentsToImages, describeAttachments } from "../channels/media.js";
-import { ALL_AGENT_TOOL_NAMES, createDiskTools } from "./tools.js";
 import {
   bootstrapSupergrok,
   getSharedModelRuntime,
@@ -25,6 +24,7 @@ import {
   resolveModel,
   resolveTavilyExtension,
 } from "./pi.js";
+import { ALL_AGENT_TOOL_NAMES, createDiskTools } from "./tools.js";
 
 export interface RuntimeDeps {
   cfg: AppConfig;
@@ -41,7 +41,14 @@ interface ActiveSession {
   sessionId: string;
   session: AgentSession;
   unsub?: () => void;
+  /** Epoch ms of the last time this session was handed out — drives idle eviction. */
+  lastUsedAt: number;
 }
+
+/** Evict cached Pi sessions idle longer than this (ms). */
+const SESSION_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
+/** Hard cap on cached Pi sessions; least-recently-used is evicted past this. */
+const SESSION_CACHE_MAX = 32;
 
 /**
  * Wraps the Pi coding-agent SDK with OpenClaw/Hermes-style context assembly,
@@ -148,9 +155,7 @@ export class AgentRuntime {
           await opts.onStep(`→ ${ev.name}${ev.args ? ` ${ev.args}` : ""}`);
         }
         if (ev.kind === "tool_end" && opts?.onStep) {
-          await opts.onStep(
-            `${ev.ok ? "✓" : "✗"} ${ev.name}${ev.detail ? ` — ${ev.detail}` : ""}`,
-          );
+          await opts.onStep(`${ev.ok ? "✓" : "✗"} ${ev.name}${ev.detail ? ` — ${ev.detail}` : ""}`);
         }
       });
     };
@@ -214,10 +219,7 @@ export class AgentRuntime {
                 emit({ kind: "thinking_start" });
               }
             }
-            if (
-              (ev.type === "thinking_delta" || ev.type === "reasoning_delta") &&
-              ev.delta
-            ) {
+            if ((ev.type === "thinking_delta" || ev.type === "reasoning_delta") && ev.delta) {
               const idx = ev.contentIndex ?? 0;
               // Some models stream deltas without an explicit start event
               if (!thinkingBuffers.has(idx)) {
@@ -379,7 +381,10 @@ export class AgentRuntime {
   async resumeSession(
     sessionIdOrPath: string,
     opts?: { key?: string; channel?: ChannelId; peerId?: string },
-  ): Promise<{ ok: true; key: string; sessionId: string; sessionFile?: string } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; key: string; sessionId: string; sessionFile?: string }
+    | { ok: false; error: string }
+  > {
     const preferredKey =
       opts?.key ??
       (opts?.channel && opts?.peerId ? makeSessionKey(opts.channel, opts.peerId) : undefined);
@@ -394,26 +399,51 @@ export class AgentRuntime {
     };
   }
 
-  private async dropCachedSession(key: string): Promise<void> {
-    const prev = this.cache.get(key);
-    if (!prev) return;
-    if (prev.unsub) prev.unsub();
+  private disposeSession(active: ActiveSession): void {
+    if (active.unsub) active.unsub();
     try {
-      prev.session.dispose();
+      active.session.dispose();
     } catch {
       /* ignore */
     }
+  }
+
+  /**
+   * Drop sessions that are idle past the TTL, then enforce the size cap by
+   * evicting least-recently-used entries. Called whenever a session is cached.
+   */
+  private evictStaleSessions(exceptKey?: string): void {
+    const now = Date.now();
+    for (const [key, active] of this.cache) {
+      if (key === exceptKey) continue;
+      if (now - active.lastUsedAt > SESSION_IDLE_TTL_MS) {
+        this.disposeSession(active);
+        this.cache.delete(key);
+        this.log.debug("evicted idle session", { key });
+      }
+    }
+    if (this.cache.size <= SESSION_CACHE_MAX) return;
+    const byAge = [...this.cache.entries()]
+      .filter(([key]) => key !== exceptKey)
+      .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
+    for (const [key, active] of byAge) {
+      if (this.cache.size <= SESSION_CACHE_MAX) break;
+      this.disposeSession(active);
+      this.cache.delete(key);
+      this.log.debug("evicted lru session", { key });
+    }
+  }
+
+  private async dropCachedSession(key: string): Promise<void> {
+    const prev = this.cache.get(key);
+    if (!prev) return;
+    this.disposeSession(prev);
     this.cache.delete(key);
   }
 
   async disposeAll(): Promise<void> {
     for (const [key, active] of this.cache) {
-      if (active.unsub) active.unsub();
-      try {
-        active.session.dispose();
-      } catch {
-        /* ignore */
-      }
+      this.disposeSession(active);
       this.cache.delete(key);
     }
   }
@@ -462,9 +492,7 @@ export class AgentRuntime {
     }
 
     const contextWindow =
-      usage?.contextWindow ||
-      (model as { contextWindow?: number } | undefined)?.contextWindow ||
-      0;
+      usage?.contextWindow || (model as { contextWindow?: number } | undefined)?.contextWindow || 0;
 
     // Fallback estimate from message text if API returns nothing useful
     let tokens = usage?.tokens ?? null;
@@ -577,9 +605,7 @@ export class AgentRuntime {
       : `${this.deps.cfg.model.provider}/${this.deps.cfg.model.id}`;
 
     return {
-      level: applied
-        ? String(active.session.thinkingLevel ?? normalized)
-        : normalized,
+      level: applied ? String(active.session.thinkingLevel ?? normalized) : normalized,
       available,
       applied,
       model: modelLabel,
@@ -650,15 +676,12 @@ export class AgentRuntime {
   ): Promise<ActiveSession> {
     const cached = this.cache.get(key);
     if (cached && cached.sessionId === sessionId && !opts?.ephemeral) {
+      cached.lastUsedAt = Date.now();
+      this.evictStaleSessions(key);
       return cached;
     }
-    if (cached?.unsub) cached.unsub();
     if (cached) {
-      try {
-        cached.session.dispose();
-      } catch {
-        /* ignore */
-      }
+      this.disposeSession(cached);
       this.cache.delete(key);
     }
 
@@ -767,16 +790,15 @@ export class AgentRuntime {
 
     // Ensure custom tools stay active even if session restore had a narrower set.
     try {
-      const active = typeof session.getActiveToolNames === "function" ? session.getActiveToolNames() : [];
+      const active =
+        typeof session.getActiveToolNames === "function" ? session.getActiveToolNames() : [];
       const missing = ALL_AGENT_TOOL_NAMES.filter((n) => !active.includes(n));
       if (missing.length && typeof session.setActiveToolsByName === "function") {
         session.setActiveToolsByName(ALL_AGENT_TOOL_NAMES);
         this.log.info("activated tools", {
           count: ALL_AGENT_TOOL_NAMES.length,
           browser: ALL_AGENT_TOOL_NAMES.filter((n) => n.startsWith("browser_")),
-          tavily: ALL_AGENT_TOOL_NAMES.filter(
-            (n) => n === "web_search" || n === "web_fetch",
-          ),
+          tavily: ALL_AGENT_TOOL_NAMES.filter((n) => n === "web_search" || n === "web_fetch"),
           extensions: extensionPaths,
         });
       } else {
@@ -794,8 +816,11 @@ export class AgentRuntime {
       if (file) sessions.setSessionFile(key, file, sid);
     }
 
-    const active: ActiveSession = { key, sessionId, session };
-    if (!opts?.ephemeral) this.cache.set(key, active);
+    const active: ActiveSession = { key, sessionId, session, lastUsedAt: Date.now() };
+    if (!opts?.ephemeral) {
+      this.cache.set(key, active);
+      this.evictStaleSessions(key);
+    }
     this.log.debug(`session ready`, {
       key,
       sessionId,
@@ -947,7 +972,17 @@ function summarizeArgs(args: unknown): string {
     if (typeof args === "object") {
       const o = args as Record<string, unknown>;
       // Prefer common short fields
-      for (const k of ["command", "path", "url", "query", "target", "name", "id", "note", "content"]) {
+      for (const k of [
+        "command",
+        "path",
+        "url",
+        "query",
+        "target",
+        "name",
+        "id",
+        "note",
+        "content",
+      ]) {
         if (typeof o[k] === "string" && o[k]) {
           return `${k}=${truncate(String(o[k]), 80)}`;
         }
@@ -1088,14 +1123,7 @@ function truncate(s: string, n: number): string {
 
 export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-const THINKING_LEVELS = new Set<string>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-]);
+const THINKING_LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
 /** Aliases users may type for /effort */
 const THINKING_ALIASES: Record<string, ThinkingEffort> = {

@@ -26,17 +26,20 @@ export function plainToTelegramHtml(input: string): string {
   const codes: string[] = [];
 
   // 1. Extract fenced code blocks first
-  let s = text.replace(/```(?:([a-zA-Z0-9_+-]+)\r?\n)?([\s\S]*?)```/g, (_m, lang: string | undefined, code: string) => {
-    const i = fences.length;
-    // Drop one leading newline (common after ```) and one trailing newline before ```
-    const body = escapeHtml(code.replace(/^\n/, "").replace(/\n$/, ""));
-    if (lang) {
-      fences.push(`<pre><code class="language-${escapeHtml(lang)}">${body}</code></pre>`);
-    } else {
-      fences.push(`<pre>${body}</pre>`);
-    }
-    return `\u0000F${i}\u0000`;
-  });
+  let s = text.replace(
+    /```(?:([a-zA-Z0-9_+-]+)\r?\n)?([\s\S]*?)```/g,
+    (_m, lang: string | undefined, code: string) => {
+      const i = fences.length;
+      // Drop one leading newline (common after ```) and one trailing newline before ```
+      const body = escapeHtml(code.replace(/^\n/, "").replace(/\n$/, ""));
+      if (lang) {
+        fences.push(`<pre><code class="language-${escapeHtml(lang)}">${body}</code></pre>`);
+      } else {
+        fences.push(`<pre>${body}</pre>`);
+      }
+      return `\u0000F${i}\u0000`;
+    },
+  );
 
   // 2. Extract inline code
   s = s.replace(/`([^`\n]+)`/g, (_m, code: string) => {

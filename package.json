@@ -27,6 +27,9 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "lint": "biome lint src/ test/",
+    "format": "biome format --write src/ test/",
+    "check": "biome check src/ test/",
     "gateway": "tsx src/cli.ts gateway",
     "setup": "tsx src/cli.ts setup",
     "test": "tsx --test test/**/*.test.ts",
@@ -77,6 +80,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.6",
     "@types/node": "^26.1.1",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2"

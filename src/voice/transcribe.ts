@@ -39,9 +39,7 @@ const DEFAULT_MODELS: Record<Exclude<SttProvider, "none">, string> = {
   groq: "whisper-large-v3-turbo",
 };
 
-export function resolveSttProvider(
-  configured: AppConfig["voice"]["provider"],
-): SttProvider {
+export function resolveSttProvider(configured: AppConfig["voice"]["provider"]): SttProvider {
   if (configured === "none") return "none";
   if (configured === "openai") return "openai";
   if (configured === "groq") return "groq";
@@ -77,10 +75,7 @@ export async function transcribeAudio(input: TranscribeInput): Promise<Transcrib
     return {
       ok: false,
       provider: input.provider,
-      error:
-        input.provider === "openai"
-          ? "OPENAI_API_KEY not set"
-          : "GROQ_API_KEY not set",
+      error: input.provider === "openai" ? "OPENAI_API_KEY not set" : "GROQ_API_KEY not set",
     };
   }
 
@@ -166,10 +161,7 @@ export function voiceMessageText(opts: {
   sttError?: string;
   localPath?: string;
 }): string {
-  const dur =
-    opts.durationSec != null && opts.durationSec > 0
-      ? ` (${opts.durationSec}s)`
-      : "";
+  const dur = opts.durationSec != null && opts.durationSec > 0 ? ` (${opts.durationSec}s)` : "";
   const caption = opts.caption?.trim();
 
   if (opts.transcript?.trim()) {

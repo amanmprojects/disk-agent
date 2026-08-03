@@ -1,12 +1,12 @@
-import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { BrowserService } from "../browser/service.js";
 import type { CronScheduler } from "../cron/scheduler.js";
+import { describeSchedule } from "../cron/scheduler.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { SessionRegistry } from "../session/manager.js";
 import type { SkillsStore } from "../skills/store.js";
 import { createSkillTools, SKILL_TOOL_NAMES } from "../skills/tools.js";
-import { describeSchedule } from "../cron/scheduler.js";
 import type { ChannelId } from "../types.js";
 
 export interface ToolContext {
@@ -51,15 +51,7 @@ export const DISK_TOOL_NAMES = [
 /** Tools registered by @tavily/pi-extension (must be on the Pi tools allowlist). */
 export const TAVILY_TOOL_NAMES = ["web_search", "web_fetch"] as const;
 
-export const BUILTIN_TOOL_NAMES = [
-  "read",
-  "bash",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-] as const;
+export const BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 
 /** Full allowlist passed to createAgentSession({ tools }) */
 export const ALL_AGENT_TOOL_NAMES: string[] = [
@@ -147,7 +139,9 @@ export function createDiskTools(ctx: ToolContext) {
     async execute(_id, params) {
       const ok = ctx.memory.deleteFact(params.id);
       return {
-        content: [{ type: "text" as const, text: ok ? `Deleted ${params.id}` : `Not found: ${params.id}` }],
+        content: [
+          { type: "text" as const, text: ok ? `Deleted ${params.id}` : `Not found: ${params.id}` },
+        ],
         details: { ok },
       };
     },
@@ -228,7 +222,9 @@ export function createDiskTools(ctx: ToolContext) {
     async execute(_id, params) {
       const ok = ctx.cron.remove(params.id);
       return {
-        content: [{ type: "text" as const, text: ok ? `Removed ${params.id}` : `Not found ${params.id}` }],
+        content: [
+          { type: "text" as const, text: ok ? `Removed ${params.id}` : `Not found ${params.id}` },
+        ],
         details: { ok },
       };
     },
@@ -328,7 +324,8 @@ export function createDiskTools(ctx: ToolContext) {
   const browser_screenshot = defineTool({
     name: "browser_screenshot",
     label: "Browser Screenshot",
-    description: "Capture a PNG screenshot of the current browser page into the browser artifacts dir.",
+    description:
+      "Capture a PNG screenshot of the current browser page into the browser artifacts dir.",
     parameters: Type.Object({
       name: Type.Optional(Type.String()),
     }),
@@ -338,7 +335,9 @@ export function createDiskTools(ctx: ToolContext) {
         content: [
           {
             type: "text" as const,
-            text: r.ok ? `Saved screenshot: ${r.screenshotPath ?? r.message}` : `Error: ${r.message}`,
+            text: r.ok
+              ? `Saved screenshot: ${r.screenshotPath ?? r.message}`
+              : `Error: ${r.message}`,
           },
         ],
         details: r,
@@ -351,7 +350,9 @@ export function createDiskTools(ctx: ToolContext) {
     label: "Browser Eval",
     description: "Evaluate JavaScript in the current browser page and return the result.",
     parameters: Type.Object({
-      expression: Type.String({ description: "JS expression/function body to evaluate in page context" }),
+      expression: Type.String({
+        description: "JS expression/function body to evaluate in page context",
+      }),
     }),
     async execute(_id, params) {
       const r = await ctx.browser.eval(params.expression);
@@ -383,7 +384,9 @@ export function createDiskTools(ctx: ToolContext) {
       "List conversation sessions. By default lists active peers; set history=true for archived transcripts (from /new resets).",
     parameters: Type.Object({
       history: Type.Optional(
-        Type.Boolean({ description: "If true, list archived previous sessions instead of active ones" }),
+        Type.Boolean({
+          description: "If true, list archived previous sessions instead of active ones",
+        }),
       ),
       key: Type.Optional(
         Type.String({ description: "Optional peer key filter, e.g. telegram:12345 or cli:local" }),
@@ -437,7 +440,9 @@ export function createDiskTools(ctx: ToolContext) {
         content: [
           {
             type: "text" as const,
-            text: rec ? `Reset ${params.key} → new session ${rec.sessionId}` : `Unknown session ${params.key}`,
+            text: rec
+              ? `Reset ${params.key} → new session ${rec.sessionId}`
+              : `Unknown session ${params.key}`,
           },
         ],
         details: { rec },

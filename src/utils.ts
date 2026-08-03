@@ -1,6 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname } from "node:path";
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -32,9 +41,29 @@ export function readJson<T>(path: string, fallback: T): T {
   }
 }
 
-export function writeJson(path: string, data: unknown): void {
+/**
+ * Write a file atomically: write to a sibling temp file, then rename over the
+ * target. rename(2) is atomic within a filesystem, so readers never observe a
+ * truncated or half-written file even if the process dies mid-write.
+ */
+export function writeFileAtomic(path: string, content: string): void {
   ensureDir(dirname(path));
-  writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf8");
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, content, "utf8");
+    renameSync(tmp, path);
+  } catch (err) {
+    try {
+      if (existsSync(tmp)) unlinkSync(tmp);
+    } catch {
+      /* ignore cleanup failure — surface the original error */
+    }
+    throw err;
+  }
+}
+
+export function writeJson(path: string, data: unknown): void {
+  writeFileAtomic(path, JSON.stringify(data, null, 2) + "\n");
 }
 
 export function readText(path: string): string | null {
@@ -47,14 +76,12 @@ export function readText(path: string): string | null {
 }
 
 export function writeText(path: string, content: string): void {
-  ensureDir(dirname(path));
-  writeFileSync(path, content, "utf8");
+  writeFileAtomic(path, content);
 }
 
 export function appendText(path: string, content: string): void {
   ensureDir(dirname(path));
-  const prev = existsSync(path) ? readFileSync(path, "utf8") : "";
-  writeFileSync(path, prev + content, "utf8");
+  appendFileSync(path, content, "utf8");
 }
 
 export function listFiles(dir: string): string[] {
@@ -115,13 +142,15 @@ export class KeyedQueue {
   run<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.tails.get(key) ?? Promise.resolve();
     const next = prev.then(fn, fn);
-    this.tails.set(
-      key,
-      next.then(
-        () => undefined,
-        () => undefined,
-      ),
+    const tail: Promise<void> = next.then(
+      () => {
+        if (this.tails.get(key) === tail) this.tails.delete(key);
+      },
+      () => {
+        if (this.tails.get(key) === tail) this.tails.delete(key);
+      },
     );
+    this.tails.set(key, tail);
     return next;
   }
 }

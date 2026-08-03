@@ -5,30 +5,25 @@
  *   agent-browser CLI + Chrome → SuperGrok login
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
-import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
+import { resolveSupergrokExtension, resolveTavilyExtension } from "./agent/pi.js";
+import { hasAnyAuth, loginProvider } from "./auth/login.js";
+import { type AppConfig, bootstrapHome, loadConfig, saveConfig } from "./config.js";
 import {
-  bootstrapHome,
-  loadConfig,
-  saveConfig,
-  type AppConfig,
-} from "./config.js";
-import {
+  type DiskAgentPaths,
   describeLayout,
   ensureLayout,
   getPaths,
   piAuthPath,
   piSettingsPath,
   resolvePiAgentDir,
-  type DiskAgentPaths,
 } from "./paths.js";
-import { loginProvider, hasAnyAuth } from "./auth/login.js";
-import { resolveSupergrokExtension, resolveTavilyExtension } from "./agent/pi.js";
 import { getVersion } from "./version.js";
 
 const require = createRequire(import.meta.url);
@@ -341,7 +336,9 @@ export function ensurePiPackages(
         continue;
       }
 
-      warn(`pi install failed for ${pkg}: ${(result.stderr || result.stdout).trim().slice(0, 200)}`);
+      warn(
+        `pi install failed for ${pkg}: ${(result.stderr || result.stdout).trim().slice(0, 200)}`,
+      );
     }
 
     // Manual settings registration + ensure npm package under pi agent npm tree
@@ -375,9 +372,7 @@ export function ensurePiPackages(
  * Install agent-browser CLI globally and download Chrome (first-time).
  * Docs: https://agent-browser.dev/
  */
-export async function ensureAgentBrowser(opts?: {
-  skipChrome?: boolean;
-}): Promise<{
+export async function ensureAgentBrowser(opts?: { skipChrome?: boolean }): Promise<{
   cli: string | null;
   installed: boolean;
   chromeOk: boolean;
@@ -517,9 +512,7 @@ async function collectUserConfig(
     process.env.TAVILY_API_KEY ||
     readEnvValue(paths.envFile, "TAVILY_API_KEY");
   const existingModel =
-    opts.model ||
-    process.env.DISK_AGENT_MODEL ||
-    `${cfg.model.provider}/${cfg.model.id}`;
+    opts.model || process.env.DISK_AGENT_MODEL || `${cfg.model.provider}/${cfg.model.id}`;
   const existingName = opts.agentName || cfg.agentName || "Disk";
   const existingCwd = opts.cwd || process.env.DISK_AGENT_CWD || cfg.cwd;
 
@@ -571,14 +564,8 @@ async function collectUserConfig(
   }
 
   console.log("");
-  console.log(
-    chalk.dim(
-      "  Tavily web search (optional — https://app.tavily.com for an API key)",
-    ),
-  );
-  console.log(
-    chalk.dim("  Enables web_search + web_fetch via @tavily/pi-extension"),
-  );
+  console.log(chalk.dim("  Tavily web search (optional — https://app.tavily.com for an API key)"));
+  console.log(chalk.dim("  Enables web_search + web_fetch via @tavily/pi-extension"));
   let tavilyApiKey = existingTavily;
   if (existingTavily) {
     ok(`tavily:    existing key detected (${maskSecret(existingTavily)})`);
@@ -618,7 +605,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   step(1, total, "Initialize standardized home directory");
   const paths = getPaths({ home: opts.dataDir, workspace: opts.workspaceDir });
   ensureLayout(paths);
-  let cfg = bootstrapHome({
+  const cfg = bootstrapHome({
     dataDir: paths.home,
     workspaceDir: paths.workspace,
     agentName: opts.agentName ?? "Disk",
@@ -672,9 +659,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   if (user.tavilyApiKey) {
     ok(`tavily:    API key saved to ${paths.envFile} (web_search / web_fetch)`);
   } else {
-    warn(
-      `tavily:    not configured — add TAVILY_API_KEY to ${paths.envFile} for web search`,
-    );
+    warn(`tavily:    not configured — add TAVILY_API_KEY to ${paths.envFile} for web search`);
   }
 
   // ── 3. Pi CLI ───────────────────────────────────────────────────────────
@@ -702,9 +687,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   let packagesInstalled: string[] = [];
   if (opts.skipPi) {
     warn("skipped package install");
-    packagesInstalled = wanted.filter((p) =>
-      packageListed(readPiSettings(agentDir).packages, p),
-    );
+    packagesInstalled = wanted.filter((p) => packageListed(readPiSettings(agentDir).packages, p));
   } else {
     const result = ensurePiPackages(piBinary, wanted);
     packagesInstalled = result.installed;
@@ -747,10 +730,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   } else {
     const want =
       browserResult.installed ||
-      (await confirm(
-        "Install agent-browser for full browser automation? (recommended)",
-        true,
-      ));
+      (await confirm("Install agent-browser for full browser automation? (recommended)", true));
     if (want) {
       browserResult = await ensureAgentBrowser();
       // Success lines already printed by ensureAgentBrowser
@@ -810,8 +790,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN"),
   );
   const tavilyConfigured = Boolean(
-    process.env.TAVILY_API_KEY?.trim() ||
-      readEnvValue(paths.envFile, "TAVILY_API_KEY"),
+    process.env.TAVILY_API_KEY?.trim() || readEnvValue(paths.envFile, "TAVILY_API_KEY"),
   );
 
   console.log("");
@@ -831,9 +810,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   console.log(
     `  tavily:    ${tavilyConfigured ? chalk.green("configured") : chalk.yellow("not set (web search disabled)")}`,
   );
-  console.log(
-    `  auth:      ${authOk ? chalk.green("ok") : chalk.yellow(authDetail || "needed")}`,
-  );
+  console.log(`  auth:      ${authOk ? chalk.green("ok") : chalk.yellow(authDetail || "needed")}`);
   console.log(`  auth file: ${piAuthPath(agentDir)}`);
   console.log("");
   console.log(chalk.bold("Next steps:"));
@@ -935,7 +912,7 @@ export async function runDoctor(opts?: {
     ok: hasSg || Boolean(resolveSupergrokExtension()),
     detail: hasSg
       ? "listed in ~/.pi/agent/settings.json"
-      : resolveSupergrokExtension() ?? "not installed",
+      : (resolveSupergrokExtension() ?? "not installed"),
   });
 
   const ext = resolveSupergrokExtension();
@@ -967,7 +944,9 @@ export async function runDoctor(opts?: {
   });
   checks.push({
     name: "TAVILY_API_KEY",
-    ok: Boolean(process.env.TAVILY_API_KEY?.trim() || readEnvValue(paths.envFile, "TAVILY_API_KEY")),
+    ok: Boolean(
+      process.env.TAVILY_API_KEY?.trim() || readEnvValue(paths.envFile, "TAVILY_API_KEY"),
+    ),
     detail:
       process.env.TAVILY_API_KEY?.trim() || readEnvValue(paths.envFile, "TAVILY_API_KEY")
         ? "set"

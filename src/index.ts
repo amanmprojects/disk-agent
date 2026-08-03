@@ -1,63 +1,62 @@
-export { Gateway } from "./gateway.js";
-export { loadConfig, saveConfig, bootstrapHome, ConfigSchema, type AppConfig } from "./config.js";
-export { MemoryStore } from "./memory/store.js";
-export { SessionRegistry, makeSessionKey } from "./session/manager.js";
-export { CronScheduler, normalizeSchedule, describeSchedule } from "./cron/scheduler.js";
-export { BrowserService } from "./browser/service.js";
-export { AgentRuntime } from "./agent/runtime.js";
 export {
   bootstrapSupergrok,
   getSharedModelRuntime,
+  piAgentDir,
+  resolveAgentExtensionPaths,
   resolveModel,
   resolveSupergrokExtension,
   resolveTavilyExtension,
-  resolveAgentExtensionPaths,
-  piAgentDir,
 } from "./agent/pi.js";
+export { AgentRuntime, normalizeThinkingLevel, type ThinkingEffort } from "./agent/runtime.js";
+export { authStatus, hasAnyAuth, loginProvider } from "./auth/login.js";
+export { BrowserService } from "./browser/service.js";
 export { TelegramChannel } from "./channels/telegram.js";
+export { type AppConfig, bootstrapHome, ConfigSchema, loadConfig, saveConfig } from "./config.js";
+export { CronScheduler, describeSchedule, normalizeSchedule } from "./cron/scheduler.js";
 export {
-  transcribeAudio,
-  resolveSttProvider,
-  voiceMessageText,
-  type SttProvider,
-  type TranscribeResult,
-} from "./voice/transcribe.js";
-export { SkillsStore, seedBuiltinSkills } from "./skills/store.js";
-export {
-  getPaths,
-  ensureLayout,
-  describeLayout,
-  resolveHomeDir,
-  resolveWorkspaceDir,
-  resolvePiAgentDir,
-  type DiskAgentPaths,
-} from "./paths.js";
-export {
-  runSetup,
-  runDoctor,
-  ensurePi,
-  ensureAgentBrowser,
-  resolvePiBinary,
-  DEFAULT_PI_PACKAGES,
-  AGENT_BROWSER_DOCS,
-} from "./setup.js";
-export { loginProvider, hasAnyAuth, authStatus } from "./auth/login.js";
-export { getVersion } from "./version.js";
-export {
+  getDaemonStatus,
+  restartDaemon,
   startDaemon,
   stopDaemon,
-  restartDaemon,
-  getDaemonStatus,
   writeRuntimePid,
 } from "./daemon.js";
+export { Gateway } from "./gateway.js";
+export { MemoryStore } from "./memory/store.js";
 export {
-  runUpdate,
-  packageSpec,
-  PACKAGE_NAME,
+  type DiskAgentPaths,
+  describeLayout,
+  ensureLayout,
+  getPaths,
+  resolveHomeDir,
+  resolvePiAgentDir,
+  resolveWorkspaceDir,
+} from "./paths.js";
+export { makeSessionKey, SessionRegistry } from "./session/manager.js";
+export {
+  AGENT_BROWSER_DOCS,
+  DEFAULT_PI_PACKAGES,
+  ensureAgentBrowser,
+  ensurePi,
+  resolvePiBinary,
+  runDoctor,
+  runSetup,
+} from "./setup.js";
+export { SkillsStore, seedBuiltinSkills } from "./skills/store.js";
+export type * from "./types.js";
+export {
   fetchRegistryVersion,
+  PACKAGE_NAME,
+  packageSpec,
   readInstalledVersion,
+  runUpdate,
   type UpdateOptions,
   type UpdateResult,
 } from "./update.js";
-export { normalizeThinkingLevel, type ThinkingEffort } from "./agent/runtime.js";
-export type * from "./types.js";
+export { getVersion } from "./version.js";
+export {
+  resolveSttProvider,
+  type SttProvider,
+  type TranscribeResult,
+  transcribeAudio,
+  voiceMessageText,
+} from "./voice/transcribe.js";

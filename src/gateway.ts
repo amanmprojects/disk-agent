@@ -1,36 +1,11 @@
+import { AgentRuntime } from "./agent/runtime.js";
+import { ALL_AGENT_TOOL_NAMES } from "./agent/tools.js";
+import { BrowserService } from "./browser/service.js";
+import { helpText } from "./channels/commands.js";
+import { TelegramChannel } from "./channels/telegram.js";
 import type { AppConfig } from "./config.js";
 import { saveConfig } from "./config.js";
-import { AgentRuntime } from "./agent/runtime.js";
-import { BrowserService } from "./browser/service.js";
-import { TelegramChannel } from "./channels/telegram.js";
 import { CronScheduler, cronJobToIncoming, describeSchedule } from "./cron/scheduler.js";
-import { Logger, defaultLogPath } from "./logger.js";
-import { MemoryStore } from "./memory/store.js";
-import { SessionRegistry, makeSessionKey } from "./session/manager.js";
-import { SkillsStore } from "./skills/store.js";
-import type {
-  AgentRunResult,
-  CronJob,
-  IncomingMessage,
-  LiveProgressEvent,
-  OutgoingMessage,
-} from "./types.js";
-import { KeyedQueue } from "./utils.js";
-import { helpText } from "./channels/commands.js";
-import { ALL_AGENT_TOOL_NAMES } from "./agent/tools.js";
-import {
-  formatStepsMode,
-  formatThoughtsMode,
-  formatVerboseMode,
-  parseStepsMode,
-  parseThoughtsMode,
-  parseVerboseMode,
-  prefsForVerbose,
-  PrefsStore,
-  stepsEnabled,
-  thoughtsEnabled,
-  type PeerPrefs,
-} from "./prefs.js";
 import {
   formatCronHtml,
   formatFinalHtml,
@@ -41,6 +16,31 @@ import {
   formatToolRunningHtml,
   plainToTelegramHtml,
 } from "./format/telegram.js";
+import { defaultLogPath, Logger } from "./logger.js";
+import { MemoryStore } from "./memory/store.js";
+import {
+  formatStepsMode,
+  formatThoughtsMode,
+  formatVerboseMode,
+  type PeerPrefs,
+  PrefsStore,
+  parseStepsMode,
+  parseThoughtsMode,
+  parseVerboseMode,
+  prefsForVerbose,
+  stepsEnabled,
+  thoughtsEnabled,
+} from "./prefs.js";
+import { makeSessionKey, SessionRegistry } from "./session/manager.js";
+import { SkillsStore } from "./skills/store.js";
+import type {
+  AgentRunResult,
+  CronJob,
+  IncomingMessage,
+  LiveProgressEvent,
+  OutgoingMessage,
+} from "./types.js";
+import { KeyedQueue } from "./utils.js";
 
 /**
  * Gateway control plane — OpenClaw-style single process that owns:
@@ -250,10 +250,7 @@ export class Gateway {
               channel: msg.channel,
               peerId: msg.peerId,
               chatId: msg.chatId,
-              text:
-                prefs.showSteps === "minimal" && !isTg
-                  ? `⚙ ${ev.name}`
-                  : html,
+              text: prefs.showSteps === "minimal" && !isTg ? `⚙ ${ev.name}` : html,
               parseMode: isTg ? "HTML" : undefined,
               silent: true,
             });
@@ -302,10 +299,7 @@ export class Gateway {
       // Mid-turn text was already delivered live; only send the undelivered tail.
       // When no live text was streamed, tailText is undefined → use full text.
       const full = result.text?.trim() || "";
-      const bare =
-        result.tailText !== undefined
-          ? result.tailText.trim()
-          : full || "(no response)";
+      const bare = result.tailText !== undefined ? result.tailText.trim() : full || "(no response)";
       // Suppress heartbeat OK (check full text so a live-only turn still suppresses)
       const suppress =
         full === "HEARTBEAT_OK" ||
@@ -325,9 +319,7 @@ export class Gateway {
         msg.channel === "telegram"
           ? formatFinalHtml(
               bare,
-              showMeta
-                ? { durationMs: result.durationMs, toolCalls: result.toolCalls }
-                : undefined,
+              showMeta ? { durationMs: result.durationMs, toolCalls: result.toolCalls } : undefined,
             )
           : composeFinalReply(bare, result, prefs);
 
@@ -421,13 +413,13 @@ export class Gateway {
           `Active: ${rec?.sessionId ?? "(none)"}  msgs=${rec?.messageCount ?? 0}`,
           rec?.sessionFile ? `  ${rec.sessionFile}` : undefined,
           ``,
-          hist.length ? `Previous (newest first):` : `No archived sessions yet. Use /new to archive the current one.`,
+          hist.length
+            ? `Previous (newest first):`
+            : `No archived sessions yet. Use /new to archive the current one.`,
         ].filter((l) => l !== undefined) as string[];
         for (const h of hist) {
           const short = h.sessionId.length > 12 ? h.sessionId.slice(0, 8) : h.sessionId;
-          lines.push(
-            `• ${short}…  msgs=${h.messageCount}  ${h.archivedAt ?? h.updatedAt}`,
-          );
+          lines.push(`• ${short}…  msgs=${h.messageCount}  ${h.archivedAt ?? h.updatedAt}`);
         }
         if (hist.length) {
           lines.push(``, `Resume: /resume <id>  (short prefix is ok)`);
@@ -488,12 +480,9 @@ export class Gateway {
             chatId: msg.chatId,
             senderName: msg.senderName,
           });
-          const tok =
-            u.tokens == null ? "?" : u.tokens.toLocaleString("en-US");
-          const win =
-            u.contextWindow > 0 ? u.contextWindow.toLocaleString("en-US") : "?";
-          const pct =
-            u.percent == null ? "?" : `${u.percent.toFixed(1)}%`;
+          const tok = u.tokens == null ? "?" : u.tokens.toLocaleString("en-US");
+          const win = u.contextWindow > 0 ? u.contextWindow.toLocaleString("en-US") : "?";
+          const pct = u.percent == null ? "?" : `${u.percent.toFixed(1)}%`;
           return [
             `Context window — this chat`,
             `${u.bar}  ${pct}`,
@@ -535,12 +524,11 @@ export class Gateway {
           }
         }
         try {
-          const result = await this.agent.setThinkingEffort(
-            msg.channel,
-            msg.peerId,
-            arg,
-            { chatId: msg.chatId, senderName: msg.senderName, persist: true },
-          );
+          const result = await this.agent.setThinkingEffort(msg.channel, msg.peerId, arg, {
+            chatId: msg.chatId,
+            senderName: msg.senderName,
+            persist: true,
+          });
           saveConfig(this.cfg);
           if (!result.applied) {
             return [
@@ -581,7 +569,9 @@ export class Gateway {
         try {
           await this.agent.ensureReady();
           const models = await this.agent.listModels();
-          const lines = models.slice(0, 40).map((m) => `${m.auth ? "✓" : "·"} ${m.provider}/${m.id}`);
+          const lines = models
+            .slice(0, 40)
+            .map((m) => `${m.auth ? "✓" : "·"} ${m.provider}/${m.id}`);
           return [
             `Available models (${models.length}):`,
             ...lines,
@@ -651,13 +641,16 @@ export class Gateway {
       }
 
       case "tools": {
-        const browser = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("browser_") || t === "web_get");
+        const browser = ALL_AGENT_TOOL_NAMES.filter(
+          (t) => t.startsWith("browser_") || t === "web_get",
+        );
         const tavily = ALL_AGENT_TOOL_NAMES.filter((t) => t === "web_search" || t === "web_fetch");
         const memory = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("memory_"));
         const cron = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("cron_"));
         const skill = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("skill_"));
         const builtin = ALL_AGENT_TOOL_NAMES.filter(
-          (t) => !t.includes("_") || ["read", "bash", "edit", "write", "grep", "find", "ls"].includes(t),
+          (t) =>
+            !t.includes("_") || ["read", "bash", "edit", "write", "grep", "find", "ls"].includes(t),
         );
         const tavilyKey = Boolean(process.env.TAVILY_API_KEY?.trim());
         return [
@@ -743,7 +736,9 @@ export class Gateway {
         }
         return [
           "Pending pairings (approve on host):",
-          ...pending.map((p) => `• ${p.code} user=${p.userId} @${p.username ?? "?"} exp=${p.expiresAt}`),
+          ...pending.map(
+            (p) => `• ${p.code} user=${p.userId} @${p.username ?? "?"} exp=${p.expiresAt}`,
+          ),
           ``,
           "Host: disk-agent pair <CODE>",
         ].join("\n");
@@ -835,11 +830,7 @@ export class Gateway {
 }
 
 /** Final answer for non-Telegram channels. */
-function composeFinalReply(
-  answer: string,
-  result: AgentRunResult,
-  prefs: PeerPrefs,
-): string {
+function composeFinalReply(answer: string, result: AgentRunResult, prefs: PeerPrefs): string {
   // Duration / tool-count footer only for full verbose (/verbose on)
   if (!(prefs.showSteps === "on" || prefs.showThoughts === "on")) return answer;
   const meta = [`${result.durationMs}ms`];

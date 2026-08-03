@@ -1,21 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { z } from "zod";
-import YAML from "yaml";
 import { config as loadDotenv } from "dotenv";
+import YAML from "yaml";
+import { z } from "zod";
+import { ensureLayout, getPaths, resolveHomeDir, resolveWorkspaceDir } from "./paths.js";
 import { seedBuiltinSkills } from "./skills/store.js";
-import {
-  ensureLayout,
-  getPaths,
-  resolveHomeDir,
-  resolveWorkspaceDir,
-} from "./paths.js";
-
-const CronDeliverSchema = z.object({
-  channel: z.enum(["telegram", "cli", "cron", "system"]).default("telegram"),
-  peerId: z.string(),
-  chatId: z.string().optional(),
-});
 
 export const ConfigSchema = z.object({
   agentName: z.string().default("Disk"),
@@ -30,11 +19,7 @@ export const ConfigSchema = z.object({
       id: z.string().default("grok-4.5"),
       thinking: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).default("medium"),
     })
-    .default({
-      provider: "supergrok",
-      id: "grok-4.5",
-      thinking: "medium",
-    }),
+    .prefault({}),
 
   telegram: z
     .object({
@@ -51,14 +36,7 @@ export const ConfigSchema = z.object({
       /** Max chars per Telegram message chunk */
       maxMessageChars: z.number().default(3900),
     })
-    .default({
-      enabled: false,
-      dmPolicy: "pairing",
-      allowFrom: [],
-      groupsRequireMention: true,
-      streamEdits: true,
-      maxMessageChars: 3900,
-    }),
+    .prefault({}),
 
   memory: z
     .object({
@@ -70,15 +48,7 @@ export const ConfigSchema = z.object({
       injectDailyLog: z.boolean().default(true),
       dailyLogDays: z.number().default(2),
     })
-    .default({
-      enabled: true,
-      maxFacts: 200,
-      injectUserMd: true,
-      injectSoulMd: true,
-      injectMemoryMd: true,
-      injectDailyLog: true,
-      dailyLogDays: 2,
-    }),
+    .prefault({}),
 
   cron: z
     .object({
@@ -92,22 +62,11 @@ export const ConfigSchema = z.object({
               start: z.number().default(23),
               end: z.number().default(8),
             })
-            .default({ start: 23, end: 8 }),
+            .prefault({}),
         })
-        .default({
-          enabled: true,
-          everyMinutes: 30,
-          quietHours: { start: 23, end: 8 },
-        }),
+        .prefault({}),
     })
-    .default({
-      enabled: true,
-      heartbeat: {
-        enabled: true,
-        everyMinutes: 30,
-        quietHours: { start: 23, end: 8 },
-      },
-    }),
+    .prefault({}),
 
   browser: z
     .object({
@@ -116,12 +75,7 @@ export const ConfigSchema = z.object({
       timeoutMs: z.number().default(60_000),
       allowedDomains: z.array(z.string()).default([]),
     })
-    .default({
-      enabled: true,
-      headless: true,
-      timeoutMs: 60_000,
-      allowedDomains: [],
-    }),
+    .prefault({}),
 
   security: z
     .object({
@@ -136,21 +90,13 @@ export const ConfigSchema = z.object({
           String.raw`\bdd\s+if=`,
         ]),
     })
-    .default({
-      bashGuard: true,
-      blockedPatterns: [
-        String.raw`\brm\s+-rf\s+/`,
-        String.raw`\bmkfs\b`,
-        String.raw`:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;`,
-        String.raw`\bdd\s+if=`,
-      ],
-    }),
+    .prefault({}),
 
   logging: z
     .object({
       level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     })
-    .default({ level: "info" }),
+    .prefault({}),
 
   /**
    * Telegram voice / audio message speech-to-text.
@@ -177,12 +123,7 @@ export const ConfigSchema = z.object({
       /** Max download size for voice/audio */
       maxBytes: z.number().default(20 * 1024 * 1024),
     })
-    .default({
-      enabled: true,
-      provider: "auto",
-      includeAudio: true,
-      maxBytes: 20 * 1024 * 1024,
-    }),
+    .prefault({}),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema> & {
@@ -198,10 +139,10 @@ export function defaultWorkspaceDir(dataDir: string): string {
   return resolveWorkspaceDir(dataDir);
 }
 
-export function resolvePaths(partial?: {
-  dataDir?: string;
-  workspaceDir?: string;
-}): { dataDir: string; workspaceDir: string } {
+export function resolvePaths(partial?: { dataDir?: string; workspaceDir?: string }): {
+  dataDir: string;
+  workspaceDir: string;
+} {
   const paths = getPaths({ home: partial?.dataDir, workspace: partial?.workspaceDir });
   return { dataDir: paths.home, workspaceDir: paths.workspace };
 }
@@ -227,7 +168,7 @@ export function loadConfig(opts?: {
   let raw: unknown = {};
   if (existsSync(file)) {
     const text = readFileSync(file, "utf8");
-    raw = file.endsWith(".json") ? JSON.parse(text) : YAML.parse(text) ?? {};
+    raw = file.endsWith(".json") ? JSON.parse(text) : (YAML.parse(text) ?? {});
   }
 
   const parsed = ConfigSchema.parse(raw ?? {});
@@ -286,7 +227,11 @@ export function saveConfig(cfg: AppConfig): void {
 }
 
 /** Seed workspace identity files if missing (OpenClaw-style). */
-export function seedWorkspace(workspaceDir: string, agentName = "Disk", projectCwd = process.cwd()): void {
+export function seedWorkspace(
+  workspaceDir: string,
+  agentName = "Disk",
+  projectCwd = process.cwd(),
+): void {
   ensureDir(workspaceDir);
   ensureDir(join(workspaceDir, "memory"));
   ensureDir(join(workspaceDir, "skills"));
@@ -465,7 +410,11 @@ DISK_AGENT_OWNER_ID=
   );
 }
 
-export function bootstrapHome(opts?: { dataDir?: string; workspaceDir?: string; agentName?: string }): AppConfig {
+export function bootstrapHome(opts?: {
+  dataDir?: string;
+  workspaceDir?: string;
+  agentName?: string;
+}): AppConfig {
   const layout = getPaths({ home: opts?.dataDir, workspace: opts?.workspaceDir });
   ensureLayout(layout);
 

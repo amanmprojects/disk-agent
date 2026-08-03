@@ -1,10 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AppConfig } from "../config.js";
+import type { Logger } from "../logger.js";
 import type { BrowserActionResult } from "../types.js";
 import { ensureDir, nowIso, uid } from "../utils.js";
-import type { Logger } from "../logger.js";
 
 /**
  * Browser automation via the `agent-browser` CLI when available,

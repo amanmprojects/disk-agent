@@ -1,14 +1,14 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, it } from "node:test";
 import { bootstrapHome, loadConfig } from "../src/config.js";
-import { MemoryStore } from "../src/memory/store.js";
-import { CronScheduler, normalizeSchedule, describeSchedule } from "../src/cron/scheduler.js";
+import { CronScheduler, describeSchedule, normalizeSchedule } from "../src/cron/scheduler.js";
 import { Logger } from "../src/logger.js";
+import { MemoryStore } from "../src/memory/store.js";
+import { makeSessionKey, SessionRegistry } from "../src/session/manager.js";
 import { chunkText, inQuietHours, KeyedQueue } from "../src/utils.js";
-import { SessionRegistry, makeSessionKey } from "../src/session/manager.js";
 
 describe("memory store", () => {
   const dir = mkdtempSync(join(tmpdir(), "disk-agent-test-"));

@@ -1,10 +1,10 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { SessionRegistry, makeSessionKey } from "../src/session/manager.js";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import type { AppConfig } from "../src/config.js";
+import { makeSessionKey, SessionRegistry } from "../src/session/manager.js";
 
 function miniCfg(dataDir: string): AppConfig {
   return {

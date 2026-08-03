@@ -8,8 +8,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import type { AppConfig } from "../config.js";
 import { getPaths } from "../paths.js";
 import { ensureDir, nowIso } from "../utils.js";
@@ -124,7 +124,10 @@ export class SkillsStore {
 
     const description = input.description.trim();
     if (description.length < 10) {
-      return { ok: false, error: "description must be at least 10 characters (used for auto-discovery)." };
+      return {
+        ok: false,
+        error: "description must be at least 10 characters (used for auto-discovery).",
+      };
     }
     if (description.length > 1024) {
       return { ok: false, error: "description too long (max 1024)." };
@@ -151,7 +154,10 @@ export class SkillsStore {
     const skillPath = join(base, "SKILL.md");
 
     if (existsSync(skillPath) && !input.force) {
-      return { ok: false, error: `Skill already exists at ${skillPath}. Pass force=true to overwrite.` };
+      return {
+        ok: false,
+        error: `Skill already exists at ${skillPath}. Pass force=true to overwrite.`,
+      };
     }
 
     ensureDir(base);
@@ -300,10 +306,7 @@ function parseSkillMd(path: string): {
 
 function matchField(block: string, key: string): string | undefined {
   // Folded/multiline block scalar: key: >\n  line...\n  line...
-  const folded = new RegExp(
-    `^${key}:\\s*[>|][-+]?\\s*\\n([\\s\\S]*?)(?=\\n[^\\s#]|$)`,
-    "mi",
-  );
+  const folded = new RegExp(`^${key}:\\s*[>|][-+]?\\s*\\n([\\s\\S]*?)(?=\\n[^\\s#]|$)`, "mi");
   const fm = block.match(folded);
   if (fm) {
     return fm[1]!

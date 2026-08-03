@@ -3,16 +3,16 @@
  * Runs the gateway as an OS process independent of the controlling terminal.
  */
 
+import { type ChildProcess, spawn } from "node:child_process";
 import {
-  existsSync,
-  readFileSync,
-  writeFileSync,
-  unlinkSync,
-  openSync,
   closeSync,
+  existsSync,
   mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
-import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPaths } from "./paths.js";
@@ -323,10 +323,10 @@ export function restartDaemon(opts: StartDaemonOptions = {}): {
  * Also cleans up pid on exit.
  */
 function sleepSync(ms: number): void {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    /* spin */
-  }
+  if (ms <= 0) return;
+  // Block the thread without burning CPU. Waiting on an Int32Array whose value
+  // never changes always times out, which is exactly the sleep we want.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 export function writeRuntimePid(dataDir: string): void {

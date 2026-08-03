@@ -74,15 +74,13 @@ export class Logger {
   }
 
   child(prefix: string): Logger {
-    const parent = this;
     const child = new Logger({ level: this.level, filePath: this.filePath });
-    const wrap =
-      (fn: (m: string, meta?: unknown) => void) => (msg: string, meta?: unknown) =>
-        fn.call(parent, `[${prefix}] ${msg}`, meta);
-    child.debug = wrap(parent.debug.bind(parent));
-    child.info = wrap(parent.info.bind(parent));
-    child.warn = wrap(parent.warn.bind(parent));
-    child.error = wrap(parent.error.bind(parent));
+    const wrap = (fn: (m: string, meta?: unknown) => void) => (msg: string, meta?: unknown) =>
+      fn(`[${prefix}] ${msg}`, meta);
+    child.debug = wrap(this.debug.bind(this));
+    child.info = wrap(this.info.bind(this));
+    child.warn = wrap(this.warn.bind(this));
+    child.error = wrap(this.error.bind(this));
     return child;
   }
 }

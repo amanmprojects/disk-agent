@@ -1,10 +1,6 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  defaultSttModel,
-  resolveSttProvider,
-  voiceMessageText,
-} from "../src/voice/transcribe.js";
+import { describe, it } from "node:test";
+import { defaultSttModel, resolveSttProvider, voiceMessageText } from "../src/voice/transcribe.js";
 
 describe("resolveSttProvider", () => {
   it("honors explicit provider", () => {

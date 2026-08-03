@@ -2,20 +2,20 @@
  * Self-update: install the latest (or pinned) npm package and restart the gateway.
  */
 
-import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { dirname, join, sep } from "node:path";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getVersion } from "./version.js";
 import {
   getDaemonStatus,
   resolveCliEntry,
   restartDaemon,
+  type StartDaemonOptions,
   startDaemon,
   stopDaemon,
-  type StartDaemonOptions,
 } from "./daemon.js";
+import { getVersion } from "./version.js";
 
 /** Published package name on npm. */
 export const PACKAGE_NAME = "@amanm/disk-agent";
@@ -172,8 +172,7 @@ function npmInstallGlobal(spec: string): { ok: boolean; detail: string } {
   return {
     ok: false,
     detail:
-      out ||
-      `npm install -g ${spec} failed (exit ${r.code ?? "?"}). Try: npm install -g ${spec}`,
+      out || `npm install -g ${spec} failed (exit ${r.code ?? "?"}). Try: npm install -g ${spec}`,
   };
 }
 
@@ -194,7 +193,7 @@ export function runUpdate(opts: UpdateOptions = {}): UpdateResult {
   const tag = (opts.version ?? "latest").trim().replace(/^v(?=\d)/, "") || "latest";
   const spec = packageSpec(opts.version);
 
-  const latestVersion = fetchRegistryVersion(tag === "latest" || tag === "next" ? tag : tag);
+  const latestVersion = fetchRegistryVersion(tag);
 
   if (opts.check) {
     const target = latestVersion ?? tag;

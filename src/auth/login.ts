@@ -2,15 +2,12 @@
  * CLI OAuth / API-key login against Pi's ModelRuntime (shared ~/.pi/agent/auth.json).
  */
 
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
-import {
-  bootstrapSupergrok,
-  getSharedModelRuntime,
-} from "../agent/pi.js";
+import { bootstrapSupergrok, getSharedModelRuntime } from "../agent/pi.js";
 
 export type LoginProvider = "supergrok" | "xai" | string;
 

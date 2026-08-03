@@ -1,5 +1,5 @@
-import { Bot, type Context } from "grammy";
 import { join } from "node:path";
+import { Bot, type Context } from "grammy";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type {
@@ -16,7 +16,7 @@ import {
   transcribeAudio,
   voiceMessageText,
 } from "../voice/transcribe.js";
-import { helpText, telegramMenuPayload } from "./commands.js";
+import { telegramMenuPayload } from "./commands.js";
 import { downloadTelegramFile, guessMime, isImageMime } from "./media.js";
 
 export type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -60,7 +60,7 @@ export class TelegramChannel {
     // Register handlers for every menu command (+ start)
     this.bot.command("start", async (ctx) => {
       const userId = String(ctx.from?.id ?? "");
-      if (await this.isAuthorized(userId)) {
+      if (this.isAuthorized(userId)) {
         await ctx.reply(
           `Hey — I'm ${this.cfg.agentName}.
 Type / for command suggestions, or /help for the full list.`,
@@ -79,8 +79,7 @@ Type / for command suggestions, or /help for the full list.`,
     });
 
     const route =
-      (name: string, opts?: { requireArgs?: boolean; usage?: string }) =>
-      async (ctx: Context) => {
+      (name: string, opts?: { requireArgs?: boolean; usage?: string }) => async (ctx: Context) => {
         if (!(await this.guard(ctx))) return;
         const match = (ctx.match?.toString() ?? "").trim();
         if (opts?.requireArgs && !match) {
@@ -190,9 +189,7 @@ Type / for command suggestions, or /help for the full list.`,
       if (!(await this.guard(ctx))) return;
       if (!(await this.groupOk(ctx))) return;
       if (!this.cfg.voice.enabled) {
-        await ctx.reply(
-          "Voice messages are disabled (voice.enabled: false). Send text instead.",
-        );
+        await ctx.reply("Voice messages are disabled (voice.enabled: false). Send text instead.");
         return;
       }
       await this.handleVoiceOrAudio(ctx, "voice");
@@ -368,7 +365,7 @@ Type / for command suggestions, or /help for the full list.`,
     return [...new Set([...owner, ...fromConfig, ...fromFile].map(String))];
   }
 
-  async isAuthorized(userId: string): Promise<boolean> {
+  isAuthorized(userId: string): boolean {
     const policy = this.cfg.telegram.dmPolicy;
     if (policy === "open") return true;
     if (policy === "owner_only") return userId === String(this.cfg.telegram.ownerId ?? "");
@@ -424,7 +421,7 @@ Type / for command suggestions, or /help for the full list.`,
 
   private async guard(ctx: Context): Promise<boolean> {
     const userId = String(ctx.from?.id ?? "");
-    if (await this.isAuthorized(userId)) return true;
+    if (this.isAuthorized(userId)) return true;
     if (this.cfg.telegram.dmPolicy === "pairing" && ctx.chat?.type === "private") {
       const code = await this.createPairing(ctx);
       await ctx.reply(
@@ -481,10 +478,7 @@ Type / for command suggestions, or /help for the full list.`,
    * Download a voice note or audio file, run STT when configured, and emit
    * an IncomingMessage whose text is the transcript (or a clear fallback).
    */
-  private async handleVoiceOrAudio(
-    ctx: Context,
-    kind: "voice" | "audio",
-  ): Promise<void> {
+  private async handleVoiceOrAudio(ctx: Context, kind: "voice" | "audio"): Promise<void> {
     const token = this.cfg.telegram.botToken;
     if (!token) return;
 
@@ -492,15 +486,13 @@ Type / for command suggestions, or /help for the full list.`,
     const voice = ctx.message?.voice;
     const audio = ctx.message?.audio;
 
-    const fileId =
-      kind === "voice" ? voice?.file_id : audio?.file_id;
+    const fileId = kind === "voice" ? voice?.file_id : audio?.file_id;
     if (!fileId) {
       this.log.warn(`${kind} message missing file_id`);
       return;
     }
 
-    const durationSec =
-      kind === "voice" ? voice?.duration : audio?.duration;
+    const durationSec = kind === "voice" ? voice?.duration : audio?.duration;
     const mimeType =
       kind === "voice"
         ? voice?.mime_type || "audio/ogg"

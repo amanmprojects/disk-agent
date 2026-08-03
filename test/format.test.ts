@@ -1,7 +1,7 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatFinalHtml, plainToTelegramHtml } from "../src/format/telegram.js";
+import { describe, it } from "node:test";
 import { joinAssistantTextParts } from "../src/agent/runtime.js";
+import { formatFinalHtml, plainToTelegramHtml } from "../src/format/telegram.js";
 
 describe("plainToTelegramHtml", () => {
   it("escapes raw HTML so the model cannot inject tags", () => {

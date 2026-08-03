@@ -1,8 +1,8 @@
 import { createWriteStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join, extname } from "node:path";
-import { pipeline } from "node:stream/promises";
+import { extname, join } from "node:path";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { MessageAttachment } from "../types.js";
 import { uid } from "../utils.js";
 
@@ -94,16 +94,13 @@ export async function downloadTelegramFile(opts: {
   await mkdir(dir, { recursive: true });
 
   const baseName =
-    opts.fileName ||
-    filePath.split("/").pop() ||
-    `${uid("media")}${extname(filePath) || ""}`;
+    opts.fileName || filePath.split("/").pop() || `${uid("media")}${extname(filePath) || ""}`;
   const safeName = baseName.replace(/[^\w.\-()+@]+/g, "_");
   const localPath = join(dir, `${Date.now()}_${safeName}`);
   await writeFile(localPath, bytes);
 
   const mime =
-    opts.mimeType ||
-    guessMime(safeName, guessMime(filePath, "application/octet-stream"));
+    opts.mimeType || guessMime(safeName, guessMime(filePath, "application/octet-stream"));
 
   const attachment: MessageAttachment = {
     type: opts.type,
@@ -148,8 +145,7 @@ export function describeAttachments(attachments: MessageAttachment[] | undefined
       if (a.localPath) bits.push(`saved:${a.localPath}`);
       if (a.base64) bits.push("vision:yes");
       if (a.transcript) {
-        const t =
-          a.transcript.length > 120 ? `${a.transcript.slice(0, 117)}…` : a.transcript;
+        const t = a.transcript.length > 120 ? `${a.transcript.slice(0, 117)}…` : a.transcript;
         bits.push(`transcript:"${t}"`);
       }
       return `- ${bits.join(" · ")}`;
