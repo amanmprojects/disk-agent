@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.1
+
+### Setup / auth
+
+- Setup now offers the **OpenCode Go** option even when SuperGrok credentials already exist — after "credentials already present" it asks "Add OpenCode Go subscription (API key) too?"
+- `disk-agent setup --login-provider opencode-go` works when already authenticated (previously the flag was ignored and the provider choice was skipped)
+
 ## 2.1.0
 
 ### Auth / models

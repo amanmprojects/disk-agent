@@ -751,13 +751,37 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   let authDetail = "";
 
   const already = await hasAnyAuth();
-  if (already && !opts.forceLogin) {
+
+  /** Run OpenCode Go API-key login; updates authOk/authDetail. */
+  const loginOpenCodeGo = async (force: boolean): Promise<void> => {
+    authAttempted = true;
+    const result = await loginProvider("opencode-go", { type: "api_key", force });
+    authOk = result.ok;
+    authDetail = result.ok ? "logged in as opencode-go" : result.error;
+    if (result.ok) ok(authDetail);
+    else {
+      fail(authDetail);
+      console.log(
+        chalk.dim("    You can retry later: disk-agent login opencode-go --type api_key"),
+      );
+      console.log(chalk.dim(`    Or set OPENCODE_API_KEY in ${paths.envFile}`));
+    }
+  };
+
+  if (opts.skipLogin) {
+    authDetail = "skipped (--skip-login)";
+    warn(authDetail);
+  } else if (already && !opts.forceLogin) {
     authOk = true;
     authDetail = "credentials already present";
     ok(authDetail);
-  } else if (opts.skipLogin) {
-    authDetail = "skipped (--skip-login)";
-    warn(authDetail);
+    // Already authenticated — still offer to add OpenCode Go (API key)
+    const wantOpenCode =
+      opts.loginProvider === "opencode-go" ||
+      (opts.loginProvider === undefined &&
+        !opts.yes &&
+        (await confirm("Add OpenCode Go subscription (API key) too?", false)));
+    if (wantOpenCode) await loginOpenCodeGo(false);
   } else {
     // Pick provider: supergrok (OAuth) | opencode-go (API key) | none
     let provider: "supergrok" | "opencode-go" | null = null;
@@ -810,20 +834,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
           console.log(chalk.dim(`    Or set XAI_API_KEY in ${paths.envFile}`));
         }
       } else {
-        const result = await loginProvider("opencode-go", {
-          type: "api_key",
-          force: opts.forceLogin,
-        });
-        authOk = result.ok;
-        authDetail = result.ok ? "logged in as opencode-go" : result.error;
-        if (result.ok) ok(authDetail);
-        else {
-          fail(authDetail);
-          console.log(
-            chalk.dim("    You can retry later: disk-agent login opencode-go --type api_key"),
-          );
-          console.log(chalk.dim(`    Or set OPENCODE_API_KEY in ${paths.envFile}`));
-        }
+        await loginOpenCodeGo(Boolean(opts.forceLogin));
       }
     } else if (!provider) {
       authDetail = "deferred — run disk-agent login when ready";
