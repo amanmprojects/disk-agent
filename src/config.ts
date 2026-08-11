@@ -382,6 +382,11 @@ DISK_AGENT_OWNER_ID=
 # Or use an xAI API key:
 # XAI_API_KEY=
 
+# OpenCode Go / OpenCode Zen subscription (usage-based credits, opencode.ai):
+#   disk-agent login opencode-go --type api_key   # stores key in ~/.pi/agent/auth.json
+#   or set:
+# OPENCODE_API_KEY=oc_...
+
 # Other providers (optional):
 # ANTHROPIC_API_KEY=
 # OPENAI_API_KEY=
@@ -398,6 +403,9 @@ DISK_AGENT_OWNER_ID=
 # DISK_AGENT_MODEL=supergrok/grok-4.3
 # DISK_AGENT_MODEL=supergrok/grok-composer-2.5-fast
 # DISK_AGENT_MODEL=xai/grok-4
+# DISK_AGENT_MODEL=opencode-go/kimi-k2.6
+# DISK_AGENT_MODEL=opencode-go/grok-4.5
+# DISK_AGENT_MODEL=opencode/claude-sonnet-4-5
 # DISK_AGENT_PROVIDER=supergrok
 
 # Paths (defaults shown):

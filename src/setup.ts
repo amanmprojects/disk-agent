@@ -56,10 +56,12 @@ export interface SetupOptions {
   skipPi?: boolean;
   /** Skip agent-browser CLI + Chrome download */
   skipBrowser?: boolean;
-  /** Skip SuperGrok login prompt */
+  /** Skip SuperGrok/OpenCode login prompt */
   skipLogin?: boolean;
   /** Force SuperGrok OAuth even if already authenticated */
   forceLogin?: boolean;
+  /** Auth provider for the login step (with --yes or to skip the choice prompt) */
+  loginProvider?: "supergrok" | "opencode-go";
   /** Non-interactive: no prompts; skip optional login/browser confirm unless forced */
   yes?: boolean;
   /** Explicitly request login (with --yes) */
@@ -597,7 +599,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   console.log(chalk.bold.cyan(`\nDisk Agent v${version} — setup\n`));
   console.log(
     chalk.dim(
-      "This wizard installs Pi, SuperGrok, Tavily, agent-browser, and configures home + Telegram.\n",
+      "This wizard installs Pi, SuperGrok, Tavily, agent-browser, and configures home + Telegram.\n" +
+        "Auth: SuperGrok/X subscription (OAuth) or OpenCode Go subscription (API key).\n",
     ),
   );
 
@@ -742,7 +745,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   }
 
   // ── 6. Auth ─────────────────────────────────────────────────────────────
-  step(6, total, "Authenticate (SuperGrok / xAI)");
+  step(6, total, "Authenticate (SuperGrok OAuth / OpenCode Go API key)");
   let authAttempted = false;
   let authOk = false;
   let authDetail = "";
@@ -756,29 +759,86 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     authDetail = "skipped (--skip-login)";
     warn(authDetail);
   } else {
+    // Pick provider: supergrok (OAuth) | opencode-go (API key) | none
+    let provider: "supergrok" | "opencode-go" | null = null;
+    if (opts.loginProvider) {
+      provider = opts.loginProvider;
+    } else if (opts.login || opts.forceLogin) {
+      provider = "supergrok"; // --login / --force-login default to SuperGrok
+    } else if (!opts.yes) {
+      console.log("");
+      console.log(chalk.dim("  Auth options:"));
+      console.log(chalk.dim("    supergrok   — SuperGrok / X Premium OAuth (pi-supergrok)"));
+      console.log(chalk.dim("    opencode-go — OpenCode Go subscription (API key, opencode.ai)"));
+      const choice = (
+        await ask("Authenticate with (supergrok/opencode-go, blank to skip)", {
+          defaultValue: "supergrok",
+        })
+      )
+        .trim()
+        .toLowerCase();
+      provider =
+        choice === "opencode" || choice === "opencode-go" || choice === "og"
+          ? "opencode-go"
+          : choice === "supergrok" || choice === "sg" || choice === "s"
+            ? "supergrok"
+            : null;
+    }
+
     const shouldLogin =
       opts.login === true ||
       opts.forceLogin === true ||
-      (!opts.yes && (await confirm("Log in with SuperGrok / X Premium now?", true)));
+      (provider !== null &&
+        !opts.yes &&
+        (await confirm(
+          provider === "supergrok"
+            ? "Log in with SuperGrok / X Premium now?"
+            : "Configure OpenCode Go API key now?",
+          true,
+        )));
 
-    if (shouldLogin) {
+    if (provider && shouldLogin) {
       authAttempted = true;
-      const result = await loginProvider("supergrok", { force: opts.forceLogin });
-      authOk = result.ok;
-      authDetail = result.ok ? `logged in as supergrok` : result.error;
-      if (result.ok) ok(authDetail);
-      else {
-        fail(authDetail);
-        console.log(chalk.dim("    You can retry later: disk-agent login"));
-        console.log(chalk.dim(`    Or set XAI_API_KEY in ${paths.envFile}`));
+      if (provider === "supergrok") {
+        const result = await loginProvider("supergrok", { force: opts.forceLogin });
+        authOk = result.ok;
+        authDetail = result.ok ? "logged in as supergrok" : result.error;
+        if (result.ok) ok(authDetail);
+        else {
+          fail(authDetail);
+          console.log(chalk.dim("    You can retry later: disk-agent login"));
+          console.log(chalk.dim(`    Or set XAI_API_KEY in ${paths.envFile}`));
+        }
+      } else {
+        const result = await loginProvider("opencode-go", {
+          type: "api_key",
+          force: opts.forceLogin,
+        });
+        authOk = result.ok;
+        authDetail = result.ok ? "logged in as opencode-go" : result.error;
+        if (result.ok) ok(authDetail);
+        else {
+          fail(authDetail);
+          console.log(
+            chalk.dim("    You can retry later: disk-agent login opencode-go --type api_key"),
+          );
+          console.log(chalk.dim(`    Or set OPENCODE_API_KEY in ${paths.envFile}`));
+        }
       }
-    } else {
+    } else if (!provider) {
       authDetail = "deferred — run disk-agent login when ready";
       warn(authDetail);
       if (process.env.XAI_API_KEY || readEnvValue(paths.envFile, "XAI_API_KEY")) {
         authOk = true;
         ok("XAI_API_KEY present");
       }
+      if (process.env.OPENCODE_API_KEY || readEnvValue(paths.envFile, "OPENCODE_API_KEY")) {
+        authOk = true;
+        ok("OPENCODE_API_KEY present (opencode / opencode-go)");
+      }
+    } else {
+      authDetail = "deferred — run disk-agent login when ready";
+      warn(authDetail);
     }
   }
 
@@ -828,6 +888,14 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   } else {
     console.log(`  ${stepN++}. disk-agent gateway`);
     console.log(`  ${stepN++}. DM the bot → disk-agent pair <CODE>`);
+  }
+  if (!authOk) {
+    console.log(
+      `  ${stepN++}. disk-agent login                              # SuperGrok / X Premium OAuth`,
+    );
+    console.log(
+      `  ${stepN++}. disk-agent login opencode-go --type api_key   # OpenCode Go subscription`,
+    );
   }
   console.log("");
   console.log(chalk.dim("CLI-only (no Telegram):  disk-agent chat"));
@@ -954,6 +1022,18 @@ export async function runDoctor(opts?: {
     soft: true,
   });
 
+  checks.push({
+    name: "OPENCODE_API_KEY",
+    ok: Boolean(
+      process.env.OPENCODE_API_KEY?.trim() || readEnvValue(paths.envFile, "OPENCODE_API_KEY"),
+    ),
+    detail:
+      process.env.OPENCODE_API_KEY?.trim() || readEnvValue(paths.envFile, "OPENCODE_API_KEY")
+        ? "set (opencode / opencode-go)"
+        : `missing — add OPENCODE_API_KEY to ${paths.envFile} for OpenCode Go (or: disk-agent login opencode-go --type api_key)`,
+    soft: true,
+  });
+
   const ab = whichCmd("agent-browser");
   checks.push({
     name: "agent-browser CLI",
@@ -966,7 +1046,9 @@ export async function runDoctor(opts?: {
   let authDetail = "unknown";
   try {
     authOk = await hasAnyAuth();
-    authDetail = authOk ? "credentials found" : "no auth — disk-agent login or XAI_API_KEY";
+    authDetail = authOk
+      ? "credentials found"
+      : "no auth — disk-agent login, OPENCODE_API_KEY, or XAI_API_KEY";
   } catch (err) {
     authDetail = err instanceof Error ? err.message : String(err);
   }

@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 2.1.0
+
+### Auth / models
+
+- **OpenCode Go subscription support** — the setup wizard now offers SuperGrok (OAuth) or OpenCode Go (API key) at the auth step, and `disk-agent login opencode-go --type api_key` stores the key in `~/.pi/agent/auth.json`
+  - `OPENCODE_API_KEY` is applied to both `opencode` (Zen) and `opencode-go` providers in the shared ModelRuntime
+  - Model fallback chain now includes OpenCode Go / Zen (`kimi-k2.6`, `grok-4.5`, `claude-sonnet-4-5`, …) after SuperGrok and before xAI
+  - New `--login-provider <supergrok|opencode-go>` flag for non-interactive `disk-agent setup`
+  - `disk-agent doctor` checks `OPENCODE_API_KEY`; `status` shows an `opencode:` line; `.env.example` documents the key and model ids
 
 ### Telegram / delivery
 

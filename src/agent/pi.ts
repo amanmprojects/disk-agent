@@ -96,6 +96,15 @@ export async function getSharedModelRuntime(log?: Logger): Promise<ModelRuntime>
           process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY!,
         );
       }
+      // OpenCode Zen / OpenCode Go subscription (usage-based credits via opencode.ai)
+      if (process.env.OPENCODE_API_KEY) {
+        await rt.setRuntimeApiKey("opencode", process.env.OPENCODE_API_KEY);
+        try {
+          await rt.setRuntimeApiKey("opencode-go", process.env.OPENCODE_API_KEY);
+        } catch {
+          /* provider may not exist yet */
+        }
+      }
 
       log?.debug("ModelRuntime ready", { agentDir, authPath });
       return rt;
@@ -224,6 +233,11 @@ export async function resolveModel(
     ["supergrok", "grok-4.20-0309-reasoning"],
     ["supergrok", "grok-composer-2.5-fast"],
     ["supergrok", "grok-build-0.1"],
+    ["opencode-go", preferred.id],
+    ["opencode-go", "kimi-k2.6"],
+    ["opencode-go", "grok-4.5"],
+    ["opencode", "kimi-k2.6"],
+    ["opencode", "claude-sonnet-4-5"],
     ["xai", preferred.id],
     ["xai", "grok-4"],
     ["xai", "grok-code-fast-1"],
@@ -285,9 +299,10 @@ export async function resolveModel(
       ``,
       `Fix one of:`,
       `  1. SuperGrok/X subscription: run \`pi\`, then /login supergrok  (uses ~/.pi/agent/auth.json)`,
-      `  2. xAI API key: export XAI_API_KEY=...`,
-      `  3. Other key: ANTHROPIC_API_KEY / OPENAI_API_KEY`,
-      `  4. Ensure pi-supergrok is installed: npm i pi-supergrok`,
+      `  2. OpenCode Go subscription: disk-agent login opencode-go --type api_key  (or export OPENCODE_API_KEY=...)`,
+      `  3. xAI API key: export XAI_API_KEY=...`,
+      `  4. Other key: ANTHROPIC_API_KEY / OPENAI_API_KEY`,
+      `  5. Ensure pi-supergrok is installed: npm i pi-supergrok`,
     ].join("\n"),
   );
 }

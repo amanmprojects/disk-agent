@@ -138,7 +138,9 @@ export async function loginProvider(
         `Provider "${provider}" is not registered.`,
         provider === "supergrok"
           ? "Install pi-supergrok: disk-agent setup  (or pi install npm:pi-supergrok)"
-          : `Available: ${rt.getRegisteredProviderIds().join(", ") || "(none)"}`,
+          : provider === "opencode-go" || provider === "opencode"
+            ? "OpenCode Go/Zen is built into pi — set OPENCODE_API_KEY or run: disk-agent login opencode-go --type api_key"
+            : `Available: ${rt.getRegisteredProviderIds().join(", ") || "(none)"}`,
       ].join("\n"),
     };
   }

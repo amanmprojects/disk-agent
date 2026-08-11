@@ -34,7 +34,7 @@ program
 program
   .command("setup")
   .description(
-    "Interactive setup: home, Telegram, Tavily, Pi extensions (supergrok + browser + tavily), SuperGrok login",
+    "Interactive setup: home, Telegram, Tavily, Pi extensions (supergrok + browser + tavily), SuperGrok or OpenCode Go login",
   )
   .option("--name <name>", "Agent name")
   .option("--data-dir <path>", "Override home directory (~/.disk-agent)")
@@ -46,8 +46,12 @@ program
   .option("--cwd <path>", "Default coding tools working directory")
   .option("--skip-pi", "Skip installing pi CLI and Pi extensions")
   .option("--skip-browser", "Skip installing agent-browser CLI + Chrome")
-  .option("--skip-login", "Skip SuperGrok OAuth login")
-  .option("--login", "Force SuperGrok login (even with --yes)")
+  .option("--skip-login", "Skip auth login prompt")
+  .option("--login", "Force login (even with --yes; defaults to SuperGrok)")
+  .option(
+    "--login-provider <supergrok|opencode-go>",
+    "Auth provider for the login step (default: supergrok; opencode-go = API key)",
+  )
   .option("--force-login", "Re-run OAuth even if already authenticated")
   .option("-y, --yes", "Non-interactive: no prompts; install defaults; skip login unless --login")
   .option(
@@ -76,6 +80,12 @@ program
         forceLogin: Boolean(opts.forceLogin),
         yes: Boolean(opts.yes),
         login: Boolean(opts.login),
+        loginProvider:
+          opts.loginProvider === "opencode-go" || opts.loginProvider === "opencode"
+            ? "opencode-go"
+            : opts.loginProvider === "supergrok"
+              ? "supergrok"
+              : undefined,
         packages: opts.package?.length ? opts.package : undefined,
       });
       // Optional project-local sample when run from a repo
@@ -92,8 +102,8 @@ program
 
 program
   .command("login")
-  .description("Log in to SuperGrok (or another Pi provider) via OAuth")
-  .argument("[provider]", "Provider id", "supergrok")
+  .description("Log in to a Pi provider (SuperGrok OAuth, OpenCode Go API key, …)")
+  .argument("[provider]", "Provider id (supergrok | opencode-go | …)", "supergrok")
   .option("--type <type>", "oauth | api_key", "oauth")
   .option("--force", "Re-authenticate even if already logged in")
   .action(async (provider: string, opts) => {
@@ -720,7 +730,12 @@ program
           (sg.some((m) => m.auth) ? chalk.green(" (auth ok)") : chalk.yellow(" (login needed)")),
       );
       console.log(
-        `auth any:  ${authOk ? chalk.green("yes") : chalk.yellow("no — run disk-agent login or set XAI_API_KEY")}`,
+        `auth any:  ${authOk ? chalk.green("yes") : chalk.yellow("no — run disk-agent login, OPENCODE_API_KEY, or XAI_API_KEY")}`,
+      );
+      const og = models.filter((m) => m.provider === "opencode-go" || m.provider === "opencode");
+      console.log(
+        `opencode:  ${og.length ? `${og.length} models` : "not loaded"}` +
+          (og.some((m) => m.auth) ? chalk.green(" (auth ok)") : chalk.yellow(" (key needed)")),
       );
     } catch (err) {
       console.log(chalk.red(`pi/auth:   ${err instanceof Error ? err.message : String(err)}`));
@@ -751,7 +766,7 @@ program
     }
     console.log("");
     console.log(`Default: ${cfg.model.provider}/${cfg.model.id}`);
-    console.log("Override: DISK_AGENT_MODEL=supergrok/grok-4.5");
+    console.log("Override: DISK_AGENT_MODEL=supergrok/grok-4.5  or  opencode-go/kimi-k2.6");
   });
 
 program.parse();
