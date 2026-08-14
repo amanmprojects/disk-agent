@@ -427,6 +427,10 @@ export class Wizard {
         if (suspended) this.resumeRenderer();
       }
       this.clearSpinner();
+      if (this.destroyed) {
+        run.abort();
+        break;
+      }
       if (run.failedStepId) {
         this.show();
         const decision = await this.waitForFailureDecision();

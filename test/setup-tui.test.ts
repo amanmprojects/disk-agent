@@ -591,6 +591,10 @@ test("runSetup: classic --yes flow completes headless with skips", async () => {
   const { runSetup } = await import("../src/setup.js");
   const dir = tmpDir();
   const ws = tmpDir();
+  // Env-relative contract: a token exported in the shell would flip assertions.
+  const hadToken = Object.hasOwn(process.env, "TELEGRAM_BOT_TOKEN");
+  const savedToken = process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.TELEGRAM_BOT_TOKEN;
   try {
     const res = await runSetup({
       yes: true,
@@ -615,6 +619,8 @@ test("runSetup: classic --yes flow completes headless with skips", async () => {
     assert.ok(existsSync(join(dir, "config.yaml")));
     assert.ok(existsSync(join(dir, ".env")));
   } finally {
+    if (hadToken) process.env.TELEGRAM_BOT_TOKEN = savedToken;
+    else delete process.env.TELEGRAM_BOT_TOKEN;
     rmSync(dir, { recursive: true, force: true });
     rmSync(ws, { recursive: true, force: true });
   }
@@ -757,5 +763,56 @@ test("wizard: spinner animates through frame callbacks", { skip: !IS_BUN }, asyn
     await Promise.race([finished, stalled]);
   } finally {
     setup.renderer.destroy();
+  }
+});
+
+test("wizard: destroy mid-install aborts the pump, no dangling state", { skip: !IS_BUN }, async () => {
+  const { createTestRenderer } = await import("@opentui/core/testing");
+  const { Wizard } = await import("../src/setup/tui.js");
+
+  const setup = await createTestRenderer({ width: 90, height: 30 });
+  try {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const steps = [
+      {
+        id: "pi",
+        title: "Install Pi CLI",
+        run: async () => {
+          await gate;
+          return { ok: false, detail: "boom", exitCode: 1, stderrTail: "fatal" };
+        },
+      },
+      {
+        id: "auth",
+        title: "Authenticate",
+        run: async () => ({ ok: true, detail: "auth ok" }),
+      },
+    ];
+    const wizard = new Wizard(setup.renderer, testCtx(), { steps });
+
+    wizard.start();
+    await driveToSummary(setup);
+    setup.mockInput.pressKey("RETURN"); // → install phase (step gated → running)
+    await flush();
+    await setup.renderOnce();
+    assert.match(setup.captureCharFrame(), /▶/);
+
+    // Destroy (Ctrl+C) while the step is running, then let the step fail.
+    setup.renderer.destroy();
+    release();
+    await flush();
+    await setup.renderOnce();
+
+    const state = (wizard as unknown as { installRun: { aborted: boolean } }).installRun;
+    assert.equal(state.aborted, true); // pump stopped on the destroyed guard
+  } finally {
+    try {
+      setup.renderer.destroy();
+    } catch {
+      /* already destroyed */
+    }
   }
 });

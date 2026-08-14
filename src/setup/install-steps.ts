@@ -161,5 +161,8 @@ export function createInstallRun(steps: InstallStep[]): InstallRunController {
 export function stderrTail(text: string | undefined, maxLines = 8): string {
   if (!text) return "";
   const lines = text.replace(/\s+$/, "").split("\n");
-  return lines.slice(-maxLines).join("\n");
+  return lines
+    .slice(-maxLines)
+    .map((l) => (l.length > 200 ? `${l.slice(0, 200)}…` : l))
+    .join("\n");
 }
