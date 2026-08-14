@@ -4,8 +4,6 @@
 
 ### Setup
 
-### Setup
-
 - **Live install progress inside the TUI wizard** — the wizard no longer drops to raw
   console output after "Review & run". The install steps (Pi CLI, Pi extensions,
   agent-browser + Chrome, auth) now run inside the wizard with per-step status

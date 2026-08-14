@@ -41,7 +41,7 @@ export interface InstallRunController {
   /** Id of the step that failed and is waiting for retry/abort, if any. */
   failedStepId: string | null;
   /** True when no step is pending/running/failed (all terminal). */
-  allDone: boolean;
+  readonly allDone: boolean;
   markRunning(id: string): void;
   markDone(id: string, result: StepResult): void;
   markFailed(id: string, result: StepResult): void;
@@ -74,14 +74,16 @@ export function createInstallRun(steps: InstallStep[]): InstallRunController {
     return v;
   };
 
-  const allDone = (): boolean =>
-    views.every((s) => s.status !== "pending" && s.status !== "running" && s.status !== "failed");
-
   const controller: InstallRunController = {
     steps: views,
     aborted: false,
     failedStepId: null,
-    allDone: allDone(),
+
+    get allDone(): boolean {
+      return views.every(
+        (s) => s.status !== "pending" && s.status !== "running" && s.status !== "failed",
+      );
+    },
 
     markRunning(id) {
       const v = view(id);
@@ -94,7 +96,6 @@ export function createInstallRun(steps: InstallStep[]): InstallRunController {
       const v = view(id);
       v.status = "done";
       v.result = result;
-      controller.allDone = allDone();
     },
 
     markFailed(id, result) {
@@ -102,14 +103,12 @@ export function createInstallRun(steps: InstallStep[]): InstallRunController {
       v.status = "failed";
       v.result = result;
       controller.failedStepId = id;
-      controller.allDone = allDone();
     },
 
     skip(id) {
       const v = view(id);
       if (v.status !== "pending") return;
       v.status = "skipped";
-      controller.allDone = allDone();
     },
 
     abort() {
@@ -120,7 +119,6 @@ export function createInstallRun(steps: InstallStep[]): InstallRunController {
         }
       }
       controller.failedStepId = null;
-      controller.allDone = allDone();
     },
 
     canRetry(id) {

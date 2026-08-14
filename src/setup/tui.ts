@@ -25,7 +25,6 @@ import {
 import {
   createInstallRun,
   type InstallRunController,
-  type InstallStep,
   type StepResult,
   stderrTail,
 } from "./install-steps.js";
@@ -70,8 +69,7 @@ export interface InstallPhaseStep {
   suspendForRun?: boolean;
   /** Skip decision from the wizard's final collected values. */
   skipWhen?: (values: TuiValues) => boolean;
-  /** Build the runnable step closure from the wizard's final values. */
-  build: (values: TuiValues) => () => Promise<StepResult>;
+  run: () => Promise<StepResult>;
 }
 
 export interface WizardOptions {
@@ -216,6 +214,8 @@ export class Wizard {
   private readonly phaseSteps: InstallPhaseStep[];
   /** collect = value screens; install = running steps; done = final summary. */
   private phase: "collect" | "install" | "done" = "collect";
+  /** Set when the renderer is destroyed (Ctrl+C / signals) — stops the install pump. */
+  private destroyed = false;
   private installRun: InstallRunController | null = null;
   private frameTick = 0;
   private frameCallback: ((deltaTime: number) => Promise<void>) | null = null;
@@ -231,7 +231,16 @@ export class Wizard {
     this.ctx = ctx;
     this.state = stateFrom(ctx);
     this.phaseSteps = opts.steps ?? [];
+    // Ctrl+C / signal destroy: stop the install pump so no further steps run
+    // and any pending failure decision resolves as abort (no orphaned installs).
+    this.renderer.on?.("destroy", this.handleDestroy);
   }
+
+  private readonly handleDestroy = (): void => {
+    this.destroyed = true;
+    this.clearSpinner();
+    this.resolveFailure("abort");
+  };
 
   start(): void {
     this.builders = this.screens();
@@ -390,13 +399,7 @@ export class Wizard {
   private async startInstall(): Promise<void> {
     this.phase = "install";
     const values = this.collectValues();
-    const steps: InstallStep[] = this.phaseSteps.map((s) => ({
-      id: s.id,
-      title: s.title,
-      suspendForRun: s.suspendForRun,
-      run: s.build(values),
-    }));
-    const run = createInstallRun(steps);
+    const run = createInstallRun(this.phaseSteps);
     this.installRun = run;
     for (const s of this.phaseSteps) {
       if (s.skipWhen?.(values)) run.skip(s.id);
@@ -410,6 +413,10 @@ export class Wizard {
     if (!run) return;
     let id = run.nextPendingId();
     while (id !== null) {
+      if (this.destroyed) {
+        run.abort();
+        break;
+      }
       const view = run.steps.find((s) => s.id === id);
       const suspended = Boolean(view?.suspendForRun);
       this.ensureSpinner();
@@ -506,7 +513,10 @@ export class Wizard {
             : s.status === "running"
               ? C.accent
               : C.dim;
-      const spinner = s.status === "running" ? ` ${["◐", "◓", "◑", "◒"][this.frameTick % 4]}` : "";
+      const spinner =
+        s.status === "running"
+          ? ` ${["◐", "◓", "◑", "◒"][Math.floor(this.frameTick / 6) % 4]}`
+          : "";
       return Box(
         { flexDirection: "row", gap: 1 },
         Text({ content: glyph, fg: color }),
@@ -554,8 +564,6 @@ export class Wizard {
         this.resolveFailure(option.value === "retry" ? "retry" : "abort");
       });
       body.push(select);
-    } else if (run?.aborted) {
-      body.push(Text({ content: "Setup aborted — remaining steps skipped.", fg: C.accent }));
     }
 
     return this.shell(
@@ -568,9 +576,11 @@ export class Wizard {
   private doneScreen(): VChild {
     const run = this.installRun;
     const rows: VChild[] = (run?.steps ?? []).map((s) => {
-      const glyph = s.status === "done" ? "✓" : s.status === "failed" ? "✗" : "–";
-      const color = s.status === "done" ? C.ok : s.status === "failed" ? "#FF6B6B" : C.dim;
-      const note = s.result && !s.result.ok ? ` — ${s.result.detail.split("\n")[0]}` : "";
+      const glyph = s.status === "done" ? "✓" : "–";
+      const color = s.status === "done" ? C.ok : C.dim;
+      // Aborted steps keep their failed result; clamp the line to the box width.
+      const note =
+        s.result && !s.result.ok ? ` — ${s.result.detail.split("\n")[0]?.slice(0, 60) ?? ""}` : "";
       return Box(
         { flexDirection: "row", gap: 1 },
         Text({ content: glyph, fg: color }),

@@ -45,7 +45,7 @@ Telegram / CLI  →  Gateway  →  AgentRuntime (Pi session)
 | Pi session + system prompt | `src/agent/runtime.ts` |
 | Custom tools + **tool allowlist** | `src/agent/tools.ts` |
 | Pi extension paths (`pi-web-search`, …) | `src/agent/pi.ts` |
-| Setup / doctor | `src/setup.ts` + `src/setup/` (`tui.ts` OpenTUI wizard, `pi-import.ts` Pi model/provider import) |
+| Setup / doctor | `src/setup.ts` + `src/setup/` (`tui.ts` OpenTUI wizard incl. in-wizard install phase, `install-steps.ts` pure install-run state machine, `pi-import.ts` Pi model/provider import) |
 | Config + dotenv | `src/config.ts` |
 | Path layout | `src/paths.ts` |
 | Telegram | `src/channels/telegram.ts` |
@@ -87,7 +87,7 @@ Home resolve order: `DISK_AGENT_HOME` → `$XDG_DATA_HOME/disk-agent` → `~/.di
 10. **Setup UI:** `disk-agent setup` opens an **OpenTUI wizard** (`src/setup/tui.ts`, raw
     `@opentui/core` constructs — not the React bindings) when the runtime can create the
     native renderer: Bun, or Node ≥ 26.4 with `--experimental-ffi`. Under older Node it
-    re-execs the same command under `bun` if on PATH, else falls back to classic readline
+    re-execs the same command under \`bun\` if on PATH, else falls back to classic readline
     prompts; `--no-tui` forces the classic flow, `--tui` forces the wizard (even without an
     interactive TTY — pty scripting / CI screenshots). Wizard values map to `SetupOptions`
     (`tuiValuesToOptions`) and the run continues with `yes: true`.
@@ -157,8 +157,9 @@ to the real `~/.disk-agent`.
 Covered: `daemon`, `utils`, `memory/store`, `session/manager`, `update`, format
 and voice helpers; `gateway` (commands, streaming, queueing, cron delivery), `agent/runtime`
 (event pipeline via an injectable fake-session seam) and `channels/telegram` (auth/pairing,
-bot-free) — see the `## Unreleased` changelog; `setup/pi-import` (pure, any Node) and `setup/tui` wizard
-walkthrough (Bun only — native renderer). **Thinnest coverage — edit with care:** the Pi
+bot-free) — see the `## Unreleased` changelog; `setup/pi-import` (pure, any Node), `setup/install-steps`
+(install-run state machine, any Node), `setup/flow` (classic runSetup smoke, any Node) and `setup/tui` wizard
+walkthrough incl. install-phase screens (Bun only — native renderer). **Thinnest coverage — edit with care:** the Pi
 SDK glue inside `agent/runtime.ts` (loader/model-resolution/`createAgentSession` path — only
 reachable without the `sessionFactory` seam) and `channels/telegram.ts` media/voice handlers
 (need a real bot).

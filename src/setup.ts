@@ -24,7 +24,7 @@ import {
   piSettingsPath,
   resolvePiAgentDir,
 } from "./paths.js";
-import type { StepResult } from "./setup/install-steps.js";
+import { type StepResult, stderrTail } from "./setup/install-steps.js";
 import { collectPiModels, readPiAuthProviders, readPiDefault } from "./setup/pi-import.js";
 import { canUseOpentui, type InstallPhaseStep, runTuiSetup, type TuiValues } from "./setup/tui.js";
 import { getVersion } from "./version.js";
@@ -675,7 +675,12 @@ function failResult(
   detail: string,
   opts?: { exitCode?: number | null; stderrTail?: string },
 ): StepResult {
-  return { ok: false, detail, exitCode: opts?.exitCode, stderrTail: opts?.stderrTail };
+  return {
+    ok: false,
+    detail: detail.slice(0, 400),
+    exitCode: opts?.exitCode,
+    stderrTail: opts?.stderrTail,
+  };
 }
 
 /** Structured values the in-wizard install steps write back for SetupResult. */
@@ -711,28 +716,32 @@ function buildInstallSteps(opts: SetupOptions, ctx: InstallCtx): InstallPhaseSte
       id: "pi",
       title: "Install Pi coding-agent CLI",
       skipWhen: (v) => v.skipPi,
-      build: () => async () => {
+      run: async () => {
         const r = await ensurePi();
         ctx.piBinary = r.binary;
         ctx.piInstalled = r.installed;
         return r.installed
           ? okResult(r.detail)
-          : failResult(r.detail, { exitCode: r.exitCode ?? null, stderrTail: r.detail });
+          : failResult(r.detail, {
+              exitCode: r.exitCode ?? null,
+              stderrTail: stderrTail(r.detail),
+            });
       },
     },
     {
       id: "extensions",
       title: "Install Pi extensions (pi-web-search, …)",
       skipWhen: (v) => v.skipPi,
-      build: () => async () => {
+      run: async () => {
         const result = ensurePiPackages(ctx.piBinary, wanted, { quiet: true });
         ctx.packagesInstalled = result.installed;
         ctx.webSearchExt = resolveWebSearchExtension();
         if (result.failed.length) {
           const first = result.failed[0];
+          const errors = result.failed.map((f) => f.error).join("\n");
           return failResult(result.failed.map((f) => `${f.pkg}: ${f.error}`).join("\n"), {
             exitCode: first?.code ?? null,
-            stderrTail: result.failed.map((f) => f.error).join("\n"),
+            stderrTail: stderrTail(errors),
           });
         }
         return okResult(
@@ -746,7 +755,7 @@ function buildInstallSteps(opts: SetupOptions, ctx: InstallCtx): InstallPhaseSte
       id: "browser",
       title: "Install agent-browser + Chrome",
       skipWhen: (v) => v.skipBrowser,
-      build: () => async () => {
+      run: async () => {
         const r = await ensureAgentBrowser({ quiet: true });
         ctx.browser = {
           cli: r.cli,
@@ -756,7 +765,10 @@ function buildInstallSteps(opts: SetupOptions, ctx: InstallCtx): InstallPhaseSte
         };
         return r.installed
           ? okResult(r.detail)
-          : failResult(r.detail, { exitCode: r.exitCode ?? null, stderrTail: r.detail });
+          : failResult(r.detail, {
+              exitCode: r.exitCode ?? null,
+              stderrTail: stderrTail(r.detail),
+            });
       },
     },
     {
@@ -764,7 +776,7 @@ function buildInstallSteps(opts: SetupOptions, ctx: InstallCtx): InstallPhaseSte
       title: "Authenticate (OpenCode Go API key)",
       suspendForRun: true,
       skipWhen: (v) => v.skipLogin,
-      build: () => async () => {
+      run: async () => {
         const already = await hasAnyAuth();
         if (already && !opts.forceLogin) {
           ctx.authAttempted = false;
@@ -782,7 +794,7 @@ function buildInstallSteps(opts: SetupOptions, ctx: InstallCtx): InstallPhaseSte
         if (result.ok) return okResult("logged in as opencode-go");
         return failResult(
           `${result.error}\nRetry later: disk-agent login opencode-go --type api_key`,
-          { stderrTail: result.error },
+          { stderrTail: stderrTail(result.error) },
         );
       },
     },
@@ -888,6 +900,10 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       if (outcome.install) {
         tuiInstallsRan = true;
         if (outcome.install.aborted) {
+          // Persist the wizard's collected values before returning — aborting
+          // the installs must not discard the configuration the user entered.
+          const user = await collectUserConfig(bootstrapCfg, paths, opts);
+          applyUserConfig(bootstrapCfg, paths, user);
           console.log(
             chalk.yellow("\n  Setup cancelled — installs aborted (partial changes may remain)."),
           );
