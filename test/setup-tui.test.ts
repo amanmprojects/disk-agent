@@ -161,6 +161,47 @@ test("collectPiModels: empty pi dir → preset safety net", async () => {
   }
 });
 
+test("collectPiModels: SDK timeout falls back to raw models-store", async () => {
+  const dir = tmpDir();
+  try {
+    write(
+      dir,
+      "models-store.json",
+      JSON.stringify({
+        "opencode-go": { models: [{ id: "grok-4.5", name: "Grok 4.5" }] },
+      }),
+    );
+    const start = Date.now();
+    const info = await collectPiModels(dir, {
+      timeoutMs: 40,
+      // Simulate an unresponsive ModelRuntime.create (offline-but-unguarded).
+      createRuntime: () => new Promise(() => {}),
+    });
+    assert.ok(Date.now() - start < 2_000, "must not wait for the hung runtime");
+    assert.ok(info.candidates.some((c) => c.label === "opencode-go/grok-4.5"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("collectPiModels: injected runtime factory is used", async () => {
+  const dir = tmpDir();
+  try {
+    const info = await collectPiModels(dir, {
+      // A minimal stand-in for ModelRuntime.create.
+      createRuntime: async () =>
+        ({
+          getRegisteredProviderIds: () => ["opencode-go"],
+          getModels: () => [{ id: "from-factory", name: "From Factory" }],
+        }) as never,
+    });
+    assert.ok(info.candidates.some((c) => c.label === "opencode-go/from-factory"));
+    assert.ok(info.candidates.some((c) => c.source === "pi-catalog"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Wizard flow (Bun only — needs the native test renderer) ──────────────
 
 test("wizard: full walkthrough collects values", { skip: !IS_BUN }, async () => {

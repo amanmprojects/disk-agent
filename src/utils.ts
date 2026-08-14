@@ -135,6 +135,29 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Resolve a promise, or reject with a timeout error once the deadline passes.
+ * The timer is cleared when the underlying promise settles; a late settle is
+ * ignored (handlers stay attached, so no unhandled rejection).
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label = "operation"): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /** Serialize async work per key (session lane). */
 export class KeyedQueue {
   private tails = new Map<string, Promise<unknown>>();

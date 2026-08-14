@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Setup
+
+- **`--tui` force flag** — `disk-agent setup --tui` forces the OpenTUI wizard even when the
+  TTY check wouldn't auto-engage (pty-driven scripting, CI screenshots); it still re-execs
+  under bun when the runtime can't render. `--no-tui` keeps forcing classic prompts.
+- **Timeout guard on Pi model import** — `collectPiModels` bounds `ModelRuntime.create` to
+  5s (was unguarded) and leans on the raw `models-store.json` fallback on expiry, so setup
+  can't hang on a stuck SDK call.
+
 ### Testing
 
 - **Coverage for the untested core** — new `test/gateway.test.ts`, `test/runtime.test.ts`, and

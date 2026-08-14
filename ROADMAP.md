@@ -12,10 +12,6 @@ is a backlog, not a promise.
       and show per-step status + failure details inside the TUI.
 - [ ] **Terminal-width adaptation** — screens use a fixed 64-col box that clips on narrow
       terminals; OpenTUI reflows on resize, the wizard doesn't track it yet.
-- [ ] **`--tui` force flag** — only `--no-tui` exists today; a positive flag helps
-      pty-driven scripting and CI screenshots.
-- [ ] **Timeout guard on `collectPiModels`** — `ModelRuntime.create` is offline-only but
-      unguarded; wrap it in a short deadline and lean on the raw-JSON fallback.
 - [ ] **Model picker search/filter** — Pi catalogs can hold hundreds of models; the picker
       currently caps at 5 per provider with no way to search.
 - [ ] **Verify the Node ≥ 26.4 + `--experimental-ffi` path** — only the Bun renderer path

@@ -32,7 +32,8 @@ disk-agent setup
 `setup` opens an **OpenTUI wizard** when the runtime supports it (Bun, or
 Node ≥ 26.4 with `--experimental-ffi`; if only `bun` is on PATH it is used
 automatically). Without either it falls back to classic text prompts.
-Use `--no-tui` to force the classic prompts.
+Use `--tui` to force the wizard (pty-driven scripting, CI screenshots) or
+`--no-tui` to force the classic prompts.
 
 That single `setup` wizard:
 

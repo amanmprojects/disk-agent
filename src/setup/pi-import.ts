@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { piAuthPath, piSettingsPath, resolvePiAgentDir } from "../paths.js";
+import { withTimeout } from "../utils.js";
 
 /** One selectable model candidate surfaced from Pi (or a built-in preset). */
 export interface PiModelCandidate {
@@ -98,6 +99,17 @@ export function readPiDefault(settingsPath: string): { provider?: string; model?
   }
 }
 
+/** Cap on how long ModelRuntime.create may take before the raw-JSON fallback. */
+const COLLECT_MODELS_TIMEOUT_MS = 5_000;
+
+/** Options for collectPiModels. */
+export interface CollectPiModelsOptions {
+  /** Deadline for ModelRuntime.create (default 5s) — on expiry, raw-JSON fallback. */
+  timeoutMs?: number;
+  /** Test seam: substitute the SDK runtime factory (defaults to ModelRuntime.create). */
+  createRuntime?: () => Promise<ModelRuntime>;
+}
+
 /**
  * Collect model candidates from an existing Pi install:
  *  1. Pi's configured default provider/model (settings.json) — first.
@@ -107,9 +119,12 @@ export function readPiDefault(settingsPath: string): { provider?: string; model?
  *
  * Prefers the pi SDK (ModelRuntime) for the catalog; falls back to a raw
  * parse of models-store.json when the runtime can't be constructed (e.g.
- * under Node < 26 without FFI).
+ * under Node < 26 without FFI) or doesn't answer within the deadline.
  */
-export async function collectPiModels(agentDir = resolvePiAgentDir()): Promise<PiModelInfo> {
+export async function collectPiModels(
+  agentDir = resolvePiAgentDir(),
+  opts: CollectPiModelsOptions = {},
+): Promise<PiModelInfo> {
   const authPath = piAuthPath(agentDir);
   const settingsPath = piSettingsPath(agentDir);
   const modelsStorePath = join(agentDir, "models-store.json");
@@ -137,14 +152,20 @@ export async function collectPiModels(agentDir = resolvePiAgentDir()): Promise<P
     push(piDefault.provider, piDefault.model, "pi-default");
   }
 
-  // 2+3. Catalog via the SDK when possible.
+  // 2+3. Catalog via the SDK when possible (bounded — never hang setup).
   let catalog: Map<string, Array<{ id: string; name?: string }>> | null = null;
   try {
-    const rt = await ModelRuntime.create({
-      authPath,
-      modelsPath: modelsStorePath,
-      allowModelNetwork: false,
-    });
+    const rt = await withTimeout(
+      opts.createRuntime
+        ? opts.createRuntime()
+        : ModelRuntime.create({
+            authPath,
+            modelsPath: modelsStorePath,
+            allowModelNetwork: false,
+          }),
+      opts.timeoutMs ?? COLLECT_MODELS_TIMEOUT_MS,
+      "ModelRuntime.create",
+    );
     const providers = rt.getRegisteredProviderIds();
     if (providers.length) {
       catalog = new Map();

@@ -646,8 +646,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     agentName: opts.agentName ?? "Disk",
   });
 
-  // ── TUI wizard (interactive only; --no-tui / --yes keep the classic flow) ──
-  if (opts.tui !== false && !opts.yes && isInteractive()) {
+  // ── TUI wizard (--tui forces it; --no-tui / --yes keep the classic flow) ──
+  // Auto mode engages when interactive. Forced mode skips the TTY check so
+  // pty-driven scripting / CI screenshots can request the wizard explicitly.
+  const wantTui = opts.tui === true || (opts.tui !== false && !opts.yes && isInteractive());
+  if (wantTui) {
     if (!canUseOpentui()) {
       // OpenTUI needs Bun or Node >= 26.4 + --experimental-ffi. If bun is on
       // PATH, re-exec this same command under it and inherit the terminal.

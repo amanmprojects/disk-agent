@@ -88,7 +88,8 @@ Home resolve order: `DISK_AGENT_HOME` → `$XDG_DATA_HOME/disk-agent` → `~/.di
     `@opentui/core` constructs — not the React bindings) when the runtime can create the
     native renderer: Bun, or Node ≥ 26.4 with `--experimental-ffi`. Under older Node it
     re-execs the same command under `bun` if on PATH, else falls back to classic readline
-    prompts; `--no-tui` forces the classic flow. Wizard values map to `SetupOptions`
+    prompts; `--no-tui` forces the classic flow, `--tui` forces the wizard (even without an
+    interactive TTY — pty scripting / CI screenshots). Wizard values map to `SetupOptions`
     (`tuiValuesToOptions`) and the run continues with `yes: true`.
 
 11. **Pi model/provider import** lives in `src/setup/pi-import.ts`: reads

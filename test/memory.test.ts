@@ -8,7 +8,7 @@ import { CronScheduler, describeSchedule, normalizeSchedule } from "../src/cron/
 import { Logger } from "../src/logger.js";
 import { MemoryStore } from "../src/memory/store.js";
 import { makeSessionKey, SessionRegistry } from "../src/session/manager.js";
-import { chunkText, inQuietHours, KeyedQueue } from "../src/utils.js";
+import { chunkText, inQuietHours, KeyedQueue, withTimeout } from "../src/utils.js";
 
 describe("memory store", () => {
   const dir = mkdtempSync(join(tmpdir(), "disk-agent-test-"));
@@ -114,6 +114,24 @@ describe("utils", () => {
       }),
     ]);
     assert.deepEqual(order, [1, 2]);
+  });
+
+  it("withTimeout resolves when the promise wins the race", async () => {
+    const out = await withTimeout(Promise.resolve("value"), 1_000);
+    assert.equal(out, "value");
+  });
+
+  it("withTimeout passes through the original rejection", async () => {
+    await assert.rejects(withTimeout(Promise.reject(new Error("boom")), 1_000), /boom/);
+  });
+
+  it("withTimeout rejects once the deadline passes", async () => {
+    const start = Date.now();
+    await assert.rejects(
+      withTimeout(new Promise(() => {}), 40, "slow thing"),
+      /slow thing timed out after 40ms/,
+    );
+    assert.ok(Date.now() - start < 2_000, "must not wait for the hung promise");
   });
 });
 
