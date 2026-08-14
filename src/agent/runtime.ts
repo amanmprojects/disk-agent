@@ -33,6 +33,19 @@ export interface RuntimeDeps {
   browser: BrowserService;
   sessions: SessionRegistry;
   skills: SkillsStore;
+  /**
+   * Test seam: when set, getOrCreateSession skips the Pi SDK glue (model
+   * runtime, resource loader, session manager) and takes the AgentSession from
+   * this factory instead. Lets tests drive run()'s event pipeline with a fake.
+   */
+  sessionFactory?: (opts: {
+    cwd: string;
+    agentDir: string;
+    channel: ChannelId;
+    peerId: string;
+    sessionId: string;
+    ephemeral: boolean;
+  }) => Promise<AgentSession>;
 }
 
 interface ActiveSession {
@@ -672,7 +685,6 @@ export class AgentRuntime {
 
     const { cfg, memory, cron, browser, sessions, skills } = this.deps;
     const cwd = cfg.cwd;
-    const modelRuntime = await getSharedModelRuntime(this.log);
 
     const deliver =
       opts?.deliverHint ??
@@ -690,88 +702,110 @@ export class AgentRuntime {
               chatId: message.chatId,
             });
 
-    const customTools = createDiskTools({
-      memory,
-      cron,
-      browser,
-      sessions,
-      skills,
-      defaultDeliver: deliver,
-      workspaceDir: cfg.workspaceDir,
-    });
+    const factory = this.deps.sessionFactory;
+    let session: AgentSession;
+    let resolvedLabel: string;
+    let extensionPaths: string[] = [];
 
-    const bootstrap = memory.buildBootstrapContext(cfg);
-    const skillCatalog = skills.catalogText(50);
-    const systemPrompt = buildSystemPrompt({
-      agentName: cfg.agentName,
-      workspaceDir: cfg.workspaceDir,
-      cwd,
-      channel: message.channel,
-      bootstrap,
-      modelLabel: `${cfg.model.provider}/${cfg.model.id}`,
-      skillCatalog,
-    });
-
-    const extensionPaths = resolveAgentExtensionPaths();
-    const settingsManager = SettingsManager.create(cwd, this.agentDir);
-
-    const loader = new DefaultResourceLoader({
-      cwd,
-      agentDir: this.agentDir,
-      settingsManager,
-      // Workspace + project + user skill roots (Pi also auto-discovers .agents/skills)
-      additionalSkillPaths: skills.discoveryPaths(),
-      additionalExtensionPaths: extensionPaths,
-      systemPromptOverride: () => systemPrompt,
-      appendSystemPromptOverride: () => [],
-      agentsFilesOverride: (current) => ({
-        agentsFiles: [
-          ...current.agentsFiles,
-          {
-            path: join(cfg.workspaceDir, "AGENTS.md"),
-            content: memory.readAgents() || "# AGENTS.md\n",
-          },
-          {
-            path: join(cfg.workspaceDir, "IDENTITY.md"),
-            content: memory.readIdentity() || `# ${cfg.agentName}\n`,
-          },
-        ],
-      }),
-    });
-    await loader.reload();
-
-    const resolved = await resolveModel(
-      { provider: cfg.model.provider, id: cfg.model.id },
-      this.log,
-    );
-
-    const rec = sessions.get(key);
-    const peerDir = sessions.peerDir(key, sessionId);
-    if (!existsSync(peerDir)) mkdirSync(peerDir, { recursive: true });
-
-    let sessionManager: SessionManager;
-    if (opts?.ephemeral) {
-      sessionManager = SessionManager.inMemory(cwd);
-    } else if (rec?.sessionFile && existsSync(rec.sessionFile)) {
-      sessionManager = SessionManager.open(rec.sessionFile, peerDir, cwd);
+    if (factory) {
+      // Test seam: bypass the Pi SDK glue and take a session from the factory.
+      session = await factory({
+        cwd,
+        agentDir: this.agentDir,
+        channel: message.channel,
+        peerId: message.peerId,
+        sessionId,
+        ephemeral: Boolean(opts?.ephemeral),
+      });
+      resolvedLabel = `${cfg.model.provider}/${cfg.model.id}`;
     } else {
-      sessionManager = SessionManager.continueRecent(cwd, peerDir);
-    }
+      const modelRuntime = await getSharedModelRuntime(this.log);
 
-    // IMPORTANT: options.tools is an allowlist. Custom tools are dropped unless
-    // their names are included here (Pi filters customTools through the same set).
-    const { session } = await createAgentSession({
-      cwd,
-      agentDir: this.agentDir,
-      modelRuntime,
-      model: resolved.model,
-      thinkingLevel: mapThinking(cfg.model.thinking),
-      tools: ALL_AGENT_TOOL_NAMES,
-      customTools,
-      resourceLoader: loader,
-      sessionManager,
-      settingsManager,
-    });
+      const customTools = createDiskTools({
+        memory,
+        cron,
+        browser,
+        sessions,
+        skills,
+        defaultDeliver: deliver,
+        workspaceDir: cfg.workspaceDir,
+      });
+
+      const bootstrap = memory.buildBootstrapContext(cfg);
+      const skillCatalog = skills.catalogText(50);
+      const systemPrompt = buildSystemPrompt({
+        agentName: cfg.agentName,
+        workspaceDir: cfg.workspaceDir,
+        cwd,
+        channel: message.channel,
+        bootstrap,
+        modelLabel: `${cfg.model.provider}/${cfg.model.id}`,
+        skillCatalog,
+      });
+
+      extensionPaths = resolveAgentExtensionPaths();
+      const settingsManager = SettingsManager.create(cwd, this.agentDir);
+
+      const loader = new DefaultResourceLoader({
+        cwd,
+        agentDir: this.agentDir,
+        settingsManager,
+        // Workspace + project + user skill roots (Pi also auto-discovers .agents/skills)
+        additionalSkillPaths: skills.discoveryPaths(),
+        additionalExtensionPaths: extensionPaths,
+        systemPromptOverride: () => systemPrompt,
+        appendSystemPromptOverride: () => [],
+        agentsFilesOverride: (current) => ({
+          agentsFiles: [
+            ...current.agentsFiles,
+            {
+              path: join(cfg.workspaceDir, "AGENTS.md"),
+              content: memory.readAgents() || "# AGENTS.md\n",
+            },
+            {
+              path: join(cfg.workspaceDir, "IDENTITY.md"),
+              content: memory.readIdentity() || `# ${cfg.agentName}\n`,
+            },
+          ],
+        }),
+      });
+      await loader.reload();
+
+      const resolved = await resolveModel(
+        { provider: cfg.model.provider, id: cfg.model.id },
+        this.log,
+      );
+      resolvedLabel = `${resolved.provider}/${resolved.id}`;
+
+      const rec = sessions.get(key);
+      const peerDir = sessions.peerDir(key, sessionId);
+      if (!existsSync(peerDir)) mkdirSync(peerDir, { recursive: true });
+
+      let sessionManager: SessionManager;
+      if (opts?.ephemeral) {
+        sessionManager = SessionManager.inMemory(cwd);
+      } else if (rec?.sessionFile && existsSync(rec.sessionFile)) {
+        sessionManager = SessionManager.open(rec.sessionFile, peerDir, cwd);
+      } else {
+        sessionManager = SessionManager.continueRecent(cwd, peerDir);
+      }
+
+      // IMPORTANT: options.tools is an allowlist. Custom tools are dropped unless
+      // their names are included here (Pi filters customTools through the same set).
+      const created = await createAgentSession({
+        cwd,
+        agentDir: this.agentDir,
+        modelRuntime,
+        model: resolved.model,
+        thinkingLevel: mapThinking(cfg.model.thinking),
+        tools: ALL_AGENT_TOOL_NAMES,
+        customTools,
+        resourceLoader: loader,
+        sessionManager,
+        settingsManager,
+      });
+      session = created.session;
+    }
 
     // Ensure custom tools stay active even if session restore had a narrower set.
     try {
@@ -809,7 +843,7 @@ export class AgentRuntime {
     this.log.debug(`session ready`, {
       key,
       sessionId,
-      model: `${resolved.provider}/${resolved.id}`,
+      model: resolvedLabel,
     });
     return active;
   }

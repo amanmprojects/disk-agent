@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Testing
+
+- **Coverage for the untested core** — new `test/gateway.test.ts`, `test/runtime.test.ts`, and
+  `test/telegram.test.ts` (70+ tests) cover the gateway's slash commands, live-stream
+  delivery (thinking indicator, tool bubbles, edits, heartbeat suppression), per-peer
+  queueing, cron delivery, the agent runtime's streaming pipeline (deltas, thinking capture,
+  tail-text semantics, session cache reuse/eviction, ephemeral heartbeats, context usage,
+  thinking effort), and Telegram auth/pairing/allowlist logic.
+- **Test seams** (no behavior change): `Gateway` accepts optional `agent`/`telegram`
+  constructor deps (`GatewayDeps`); `AgentRuntime` accepts `RuntimeDeps.sessionFactory` to
+  replace the Pi session factory with a fake.
+
 ### Web search / providers
 
 - **SuperGrok, xAI, and Tavily removed entirely.** Dependencies `pi-supergrok` and `@tavily/pi-extension` are gone, along with every reference in code, setup, docs, and tests.

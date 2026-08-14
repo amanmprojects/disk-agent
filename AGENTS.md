@@ -101,6 +101,17 @@ Home resolve order: `DISK_AGENT_HOME` → `$XDG_DATA_HOME/disk-agent` → `~/.di
     keys until something else is focused, so every screen must focus its first focusable
     (`focusRootId`). Select screens need that focus or `ITEM_SELECTED` never fires.
 
+13. **Test seams live in the codebase:** `Gateway` takes optional `agent`/`telegram`
+    constructor deps (`GatewayDeps` — structural `AgentLike`/`TelegramLike` picks) and
+    `AgentRuntime` takes `RuntimeDeps.sessionFactory`, which bypasses the Pi SDK glue so
+    tests can drive `run()`'s streaming pipeline with `test/runtime.test.ts`'s
+    `FakePiSession`. Production call sites construct with no deps — don't add required params.
+
+14. **Fake Pi sessions must mimic restore semantics:** `SessionRegistry.setSessionFile`
+    overwrites `rec.sessionId` with the session's id, so a fake's `sessionId` must adopt
+    `opts.sessionId` and its `sessionFile` must exist on disk (`resume()` refuses missing
+    files). Premade fakes with fixed ids break cache reuse and resume tests.
+
 ## State & concurrency conventions
 
 - **All JSON state goes through `writeJson` / `writeFileAtomic`** (`utils.ts`) — temp file + `rename`. Never `writeFileSync` a state file directly; a crash mid-write corrupts it.
@@ -143,9 +154,13 @@ Anything touching disk uses `mkdtempSync(join(tmpdir(), …))` in `beforeEach` a
 to the real `~/.disk-agent`.
 
 Covered: `daemon`, `utils`, `memory/store`, `session/manager`, `update`, format
-and voice helpers; `setup/pi-import` (pure, any Node) and `setup/tui` wizard
-walkthrough (Bun only — native renderer). **Untested — edit with care:**
-`gateway.ts`, `agent/runtime.ts`, `channels/telegram.ts`.
+and voice helpers; `gateway` (commands, streaming, queueing, cron delivery), `agent/runtime`
+(event pipeline via an injectable fake-session seam) and `channels/telegram` (auth/pairing,
+bot-free) — see the `## Unreleased` changelog; `setup/pi-import` (pure, any Node) and `setup/tui` wizard
+walkthrough (Bun only — native renderer). **Thinnest coverage — edit with care:** the Pi
+SDK glue inside `agent/runtime.ts` (loader/model-resolution/`createAgentSession` path — only
+reachable without the `sessionFactory` seam) and `channels/telegram.ts` media/voice handlers
+(need a real bot).
 
 ## Adding something new
 

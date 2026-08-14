@@ -24,9 +24,6 @@ is a backlog, not a promise.
 
 ## Testing & CI
 
-- [ ] **Coverage for the untested core** — `gateway.ts`, `agent/runtime.ts`,
-      `channels/telegram.ts` are flagged untested in AGENTS.md and are the highest-risk
-      code in the project.
 - [ ] **PTY-level E2E for setup** — a scripted pseudo-terminal walkthrough (renderer +
       real `dist/cli.js setup`) to catch integration issues the test renderer can't
       (terminal capability handshake, re-exec under bun).

@@ -46,6 +46,41 @@ import { KeyedQueue } from "./utils.js";
  * Gateway control plane — OpenClaw-style single process that owns:
  * channels, session routing, agent runtime, cron, memory, browser.
  */
+
+/** Structural surface the gateway needs from the agent runtime (test seam). */
+export type AgentLike = Pick<
+  AgentRuntime,
+  | "run"
+  | "resetSession"
+  | "resumeSession"
+  | "getContextUsage"
+  | "getThinkingEffort"
+  | "setThinkingEffort"
+  | "ensureReady"
+  | "listModels"
+  | "disposeAll"
+>;
+
+/** Structural surface the gateway needs from the Telegram channel (test seam). */
+export type TelegramLike = Pick<
+  TelegramChannel,
+  | "onMessage"
+  | "isEnabled"
+  | "start"
+  | "stop"
+  | "send"
+  | "typing"
+  | "deleteMessage"
+  | "listPendingPairings"
+  | "approvePairing"
+>;
+
+/** Constructor overrides for tests; both default to the real implementations. */
+export interface GatewayDeps {
+  agent?: AgentLike;
+  telegram?: TelegramLike;
+}
+
 export class Gateway {
   readonly cfg: AppConfig;
   readonly log: Logger;
@@ -53,32 +88,34 @@ export class Gateway {
   readonly sessions: SessionRegistry;
   readonly cron: CronScheduler;
   readonly browser: BrowserService;
-  readonly telegram: TelegramChannel;
-  readonly agent: AgentRuntime;
+  readonly telegram: TelegramLike;
+  readonly agent: AgentLike;
   readonly prefs: PrefsStore;
   readonly skills: SkillsStore;
   private queue = new KeyedQueue();
   private started = false;
 
-  constructor(cfg: AppConfig) {
+  constructor(cfg: AppConfig, deps: GatewayDeps = {}) {
     this.cfg = cfg;
     this.log = new Logger({ level: cfg.logging.level, filePath: defaultLogPath(cfg.dataDir) });
     this.memory = new MemoryStore(cfg);
     this.sessions = new SessionRegistry(cfg);
     this.cron = new CronScheduler(cfg, this.log);
     this.browser = new BrowserService(cfg, this.log);
-    this.telegram = new TelegramChannel(cfg, this.log);
+    this.telegram = deps.telegram ?? new TelegramChannel(cfg, this.log);
     this.prefs = new PrefsStore(cfg);
     this.skills = new SkillsStore(cfg);
-    this.agent = new AgentRuntime({
-      cfg,
-      log: this.log,
-      memory: this.memory,
-      cron: this.cron,
-      browser: this.browser,
-      sessions: this.sessions,
-      skills: this.skills,
-    });
+    this.agent =
+      deps.agent ??
+      new AgentRuntime({
+        cfg,
+        log: this.log,
+        memory: this.memory,
+        cron: this.cron,
+        browser: this.browser,
+        sessions: this.sessions,
+        skills: this.skills,
+      });
   }
 
   async start(): Promise<void> {
