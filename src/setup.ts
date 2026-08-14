@@ -24,6 +24,8 @@ import {
   piSettingsPath,
   resolvePiAgentDir,
 } from "./paths.js";
+import { collectPiModels, readPiAuthProviders, readPiDefault } from "./setup/pi-import.js";
+import { canUseOpentui, runTuiSetup, type TuiValues } from "./setup/tui.js";
 import { getVersion } from "./version.js";
 
 const require = createRequire(import.meta.url);
@@ -69,6 +71,8 @@ export interface SetupOptions {
   /** Extra pi packages to install (npm:… specs) */
   packages?: string[];
   cwd?: string;
+  /** TUI wizard: true=force, false=classic prompts (--no-tui), undefined=auto */
+  tui?: boolean;
 }
 
 export interface SetupResult {
@@ -94,7 +98,7 @@ export interface SetupResult {
 }
 
 function step(n: number, total: number, msg: string): void {
-  console.log(chalk.bold(`\n[${n}/${total}]`) + ` ${msg}`);
+  console.log(`${chalk.bold(`\n[${n}/${total}]`)} ${msg}`);
 }
 
 function ok(msg: string): void {
@@ -274,7 +278,7 @@ function readPiSettings(agentDir: string): { packages?: string[]; [k: string]: u
 
 function writePiSettings(agentDir: string, data: Record<string, unknown>): void {
   mkdirSync(agentDir, { recursive: true });
-  writeFileSync(piSettingsPath(agentDir), JSON.stringify(data, null, 2) + "\n", "utf8");
+  writeFileSync(piSettingsPath(agentDir), `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
 /** Package name without npm: prefix or version (handles scoped @org/name). */
@@ -462,7 +466,7 @@ function upsertEnv(envPath: string, entries: Record<string, string | undefined>)
       text = text.replace(re, line);
     } else {
       if (text && !text.endsWith("\n")) text += "\n";
-      text += line + "\n";
+      text += `${line}\n`;
     }
   }
   writeFileSync(envPath, text, "utf8");
@@ -483,6 +487,85 @@ function maskSecret(value: string): string {
   return "********";
 }
 
+/** Map wizard values onto SetupOptions (non-interactive: user already chose). */
+function tuiValuesToOptions(v: TuiValues): SetupOptions {
+  return {
+    agentName: v.agentName,
+    model: v.model,
+    cwd: v.cwd,
+    telegramToken: v.telegramToken,
+    ownerId: v.ownerId,
+    tavilyApiKey: v.tavilyApiKey,
+    skipPi: v.skipPi,
+    skipBrowser: v.skipBrowser,
+    skipLogin: v.skipLogin,
+    loginProvider: v.loginProvider,
+    login: v.loginProvider ? true : undefined,
+    yes: true,
+  };
+}
+
+function cancelledResult(version: string, paths: DiskAgentPaths): SetupResult {
+  const agentDir = resolvePiAgentDir();
+  return {
+    cfg: loadConfig({ dataDir: paths.home, workspaceDir: paths.workspace }),
+    paths,
+    pi: { binary: null, installed: false, packages: [], agentDir },
+    browser: { cli: null, installed: false, chromeOk: false, detail: "cancelled" },
+    telegram: { configured: false },
+    tavily: { configured: false },
+    supergrokExtension: null,
+    auth: { attempted: false, ok: false, detail: "cancelled" },
+    version,
+  };
+}
+
+/**
+ * Existing values for prefill, with the same precedence as the classic
+ * prompts: explicit opts → env → saved config → defaults.
+ */
+function resolveExistingValues(
+  cfg: AppConfig,
+  paths: DiskAgentPaths,
+  opts: SetupOptions,
+): {
+  agentName: string;
+  model: string;
+  cwd: string;
+  telegramToken?: string;
+  ownerId?: string;
+  tavilyApiKey?: string;
+} {
+  // Prefill the model from Pi's configured default when nothing is set yet
+  // and the config still has the stock supergrok/grok-4.5 default.
+  const cfgDefault = `${cfg.model.provider}/${cfg.model.id}`;
+  let model = opts.model || process.env.DISK_AGENT_MODEL || cfgDefault;
+  if (!opts.model && !process.env.DISK_AGENT_MODEL && cfgDefault === "supergrok/grok-4.5") {
+    const pi = readPiDefault(piSettingsPath());
+    if (pi.provider && pi.model) model = `${pi.provider}/${pi.model}`;
+  }
+
+  return {
+    agentName: opts.agentName || cfg.agentName || "Disk",
+    model,
+    cwd: opts.cwd || process.env.DISK_AGENT_CWD || cfg.cwd,
+    telegramToken:
+      opts.telegramToken ||
+      cfg.telegram.botToken ||
+      process.env.TELEGRAM_BOT_TOKEN ||
+      readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN"),
+    ownerId:
+      opts.ownerId ||
+      cfg.telegram.ownerId ||
+      process.env.DISK_AGENT_OWNER_ID ||
+      readEnvValue(paths.envFile, "DISK_AGENT_OWNER_ID"),
+    tavilyApiKey:
+      opts.tavilyApiKey ||
+      process.env.TAVILY_API_KEY ||
+      readEnvValue(paths.envFile, "TAVILY_API_KEY"),
+  };
+}
+
 /**
  * Interactive prompts for agent name, model, Telegram, Tavily, owner, cwd.
  * Flags / existing env take precedence; --yes skips prompts (keeps defaults / flags).
@@ -499,24 +582,15 @@ async function collectUserConfig(
   tavilyApiKey?: string;
   cwd?: string;
 }> {
-  const existingToken =
-    opts.telegramToken ||
-    cfg.telegram.botToken ||
-    process.env.TELEGRAM_BOT_TOKEN ||
-    readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN");
-  const existingOwner =
-    opts.ownerId ||
-    cfg.telegram.ownerId ||
-    process.env.DISK_AGENT_OWNER_ID ||
-    readEnvValue(paths.envFile, "DISK_AGENT_OWNER_ID");
-  const existingTavily =
-    opts.tavilyApiKey ||
-    process.env.TAVILY_API_KEY ||
-    readEnvValue(paths.envFile, "TAVILY_API_KEY");
-  const existingModel =
-    opts.model || process.env.DISK_AGENT_MODEL || `${cfg.model.provider}/${cfg.model.id}`;
-  const existingName = opts.agentName || cfg.agentName || "Disk";
-  const existingCwd = opts.cwd || process.env.DISK_AGENT_CWD || cfg.cwd;
+  const existing = resolveExistingValues(cfg, paths, opts);
+  const {
+    agentName: existingName,
+    model: existingModel,
+    cwd: existingCwd,
+    telegramToken: existingToken,
+    ownerId: existingOwner,
+    tavilyApiKey: existingTavily,
+  } = existing;
 
   if (opts.yes || !isInteractive()) {
     return {
@@ -595,6 +669,54 @@ async function collectUserConfig(
  */
 export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   const version = getVersion();
+
+  // Layout + home bootstrap happen before any output so the OpenTUI wizard
+  // (alternate screen) starts clean; step 1 below prints the same result.
+  const paths = getPaths({ home: opts.dataDir, workspace: opts.workspaceDir });
+  ensureLayout(paths);
+  const bootstrapCfg = bootstrapHome({
+    dataDir: paths.home,
+    workspaceDir: paths.workspace,
+    agentName: opts.agentName ?? "Disk",
+  });
+
+  // ── TUI wizard (interactive only; --no-tui / --yes keep the classic flow) ──
+  if (opts.tui !== false && !opts.yes && isInteractive()) {
+    if (!canUseOpentui()) {
+      // OpenTUI needs Bun or Node >= 26.4 + --experimental-ffi. If bun is on
+      // PATH, re-exec this same command under it and inherit the terminal.
+      const bun = whichCmd("bun");
+      if (bun) {
+        const r = spawnSync(bun, process.argv.slice(1), {
+          stdio: "inherit",
+          env: process.env,
+          timeout: 600_000,
+        });
+        // Fall back to classic prompts if bun itself failed to start.
+        if (!r.error && r.status !== null) process.exit(r.status ?? 1);
+      }
+      // no bun (or bun failed) → fall through to the classic readline prompts below
+    } else {
+      const piInfo = await collectPiModels();
+      const existing = resolveExistingValues(bootstrapCfg, paths, opts);
+      const auth = {
+        providers: readPiAuthProviders(piAuthPath()),
+        envKeys: ["XAI_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"].filter(
+          (k) => Boolean(process.env[k]?.trim()),
+        ),
+      };
+      const outcome = await runTuiSetup({ version, existing, piInfo, auth });
+      if (outcome.cancelled && !outcome.rendererFailed) {
+        console.log(chalk.yellow("\n  Setup cancelled — nothing changed."));
+        return cancelledResult(version, paths);
+      }
+      if (!outcome.rendererFailed && outcome.values) {
+        opts = { ...opts, ...tuiValuesToOptions(outcome.values) };
+      }
+      // rendererFailed → fall through to classic prompts
+    }
+  }
+
   const total = 7;
   console.log(chalk.bold.cyan(`\nDisk Agent v${version} — setup\n`));
   console.log(
@@ -606,8 +728,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
 
   // ── 1. Home layout ──────────────────────────────────────────────────────
   step(1, total, "Initialize standardized home directory");
-  const paths = getPaths({ home: opts.dataDir, workspace: opts.workspaceDir });
-  ensureLayout(paths);
   const cfg = bootstrapHome({
     dataDir: paths.home,
     workspaceDir: paths.workspace,
@@ -621,7 +741,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     "layout:\n" +
       describeLayout(paths)
         .split("\n")
-        .map((l) => "      " + l)
+        .map((l) => `      ${l}`)
         .join("\n"),
   );
 
@@ -1110,11 +1230,11 @@ export async function runDoctor(opts?: {
 
   for (const c of checks) {
     if (c.ok) {
-      console.log(chalk.green("✓") + ` ${c.name.padEnd(28)} ${chalk.dim(c.detail)}`);
+      console.log(`${chalk.green("✓")} ${c.name.padEnd(28)} ${chalk.dim(c.detail)}`);
     } else if (c.soft) {
-      console.log(chalk.yellow("○") + ` ${c.name.padEnd(28)} ${c.detail}`);
+      console.log(`${chalk.yellow("○")} ${c.name.padEnd(28)} ${c.detail}`);
     } else {
-      console.log(chalk.red("✗") + ` ${c.name.padEnd(28)} ${c.detail}`);
+      console.log(`${chalk.red("✗")} ${c.name.padEnd(28)} ${c.detail}`);
       exit = 1;
     }
   }

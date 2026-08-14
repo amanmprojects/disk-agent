@@ -169,10 +169,10 @@ name: ${name}
 description: ${yamlEscape(description)}
 ---
 
-${body.endsWith("\n") ? body : body + "\n"}`;
+${body.endsWith("\n") ? body : `${body}\n`}`;
 
     // atomic write
-    const tmp = skillPath + `.tmp.${Date.now()}`;
+    const tmp = `${skillPath}.tmp.${Date.now()}`;
     writeFileSync(tmp, content, "utf8");
     renameSync(tmp, skillPath);
 

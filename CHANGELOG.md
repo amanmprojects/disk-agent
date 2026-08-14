@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Setup — OpenTUI wizard
+
+- `disk-agent setup` now opens an **OpenTUI wizard** (raw `@opentui/core` constructs, new dependency) instead of text prompts when the runtime supports it: welcome → agent basics → model/provider → Telegram → Tavily → components (pi, agent-browser, auth) → review & run. Enter/Tab navigate, Esc goes back (or cancels on the first screen).
+- **Import models/providers from Pi** — the model screen lists candidates from `~/.pi/agent/auth.json` (providers with credentials), `models-store.json` (catalog), and `settings.json` (Pi's configured default first), each tagged with its source + auth state; manual entry stays available. The classic prompt flow also prefills the default model from Pi's `settings.json` when config is unset.
+- The auth screen shows existing credentials (`auth.json` providers + relevant env keys) before you pick a provider.
+- **Runtime gating:** the wizard auto-engages under Bun or Node ≥ 26.4 + `--experimental-ffi`; on older Node it re-execs the command under `bun` when available (falling back to classic prompts if bun fails), otherwise uses the classic readline flow. New `--no-tui` flag forces the classic prompts.
+- Setup cancelled via Esc now exits cleanly with a message instead of continuing.
+
+### CI / tooling
+
+- Added `.github/workflows/ci.yml`: typecheck + biome + build + tests on Node 20/22/24, plus the full test suite under Bun (required for the OpenTUI wizard tests, which use the native renderer and skip under plain Node).
+- Repo-wide lint cleanup (template-literal conversions, dead code removal, `biome-ignore` for intentional NUL sentinels in `format/telegram.ts`) so `npm run check` is green.
+- `AGENTS.md` and `README.md` updated for the wizard, Pi import, and Bun requirement.
+
 ## 2.1.1
 
 ### Setup / auth

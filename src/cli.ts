@@ -34,7 +34,7 @@ program
 program
   .command("setup")
   .description(
-    "Interactive setup: home, Telegram, Tavily, Pi extensions (supergrok + browser + tavily), SuperGrok or OpenCode Go login",
+    "OpenTUI setup wizard (or classic prompts): home, model/provider (importable from Pi), Telegram, Tavily, Pi extensions + SuperGrok or OpenCode Go login",
   )
   .option("--name <name>", "Agent name")
   .option("--data-dir <path>", "Override home directory (~/.disk-agent)")
@@ -47,6 +47,7 @@ program
   .option("--skip-pi", "Skip installing pi CLI and Pi extensions")
   .option("--skip-browser", "Skip installing agent-browser CLI + Chrome")
   .option("--skip-login", "Skip auth login prompt")
+  .option("--no-tui", "Use classic text prompts instead of the OpenTUI wizard")
   .option("--login", "Force login (even with --yes; defaults to SuperGrok)")
   .option(
     "--login-provider <supergrok|opencode-go>",
@@ -80,6 +81,7 @@ program
         forceLogin: Boolean(opts.forceLogin),
         yes: Boolean(opts.yes),
         login: Boolean(opts.login),
+        tui: opts.tui === false ? false : undefined,
         loginProvider:
           opts.loginProvider === "opencode-go" || opts.loginProvider === "opencode"
             ? "opencode-go"

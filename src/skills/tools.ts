@@ -188,13 +188,13 @@ export function createSkillTools(store: SkillsStore) {
       if (params.global) args.push("-g");
       const result = await runSkillsCli(args, 120_000);
       const text =
-        (result.stdout + "\n" + result.stderr).trim() ||
+        `${result.stdout}\n${result.stderr}`.trim() ||
         (result.code === 0 ? "Installed." : `install failed (exit ${result.code})`);
       return {
         content: [
           {
             type: "text" as const,
-            text: text + "\n\nRun skill_list to verify. New skills load on the next agent turn.",
+            text: `${text}\n\nRun skill_list to verify. New skills load on the next agent turn.`,
           },
         ],
         details: result,
@@ -227,7 +227,7 @@ function runSkillsCli(
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve({ code: 124, stdout, stderr: stderr + "\n(timeout)" });
+      resolve({ code: 124, stdout, stderr: `${stderr}\n(timeout)` });
     }, timeoutMs);
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));

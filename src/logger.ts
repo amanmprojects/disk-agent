@@ -53,7 +53,7 @@ export class Logger {
 
     if (this.filePath) {
       try {
-        appendFileSync(this.filePath, line + "\n", "utf8");
+        appendFileSync(this.filePath, `${line}\n`, "utf8");
       } catch {
         // ignore file write errors
       }

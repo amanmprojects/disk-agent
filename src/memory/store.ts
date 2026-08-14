@@ -216,7 +216,7 @@ export class MemoryStore {
     if (re.test(text)) {
       text = text.replace(re, `${heading}\n${body.trim()}\n\n`);
     } else {
-      text = text.trimEnd() + `\n\n${heading}\n${body.trim()}\n`;
+      text = `${text.trimEnd()}\n\n${heading}\n${body.trim()}\n`;
     }
     writeText(path, text);
   }

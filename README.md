@@ -29,15 +29,20 @@ npm install -g @amanm/disk-agent
 disk-agent setup
 ```
 
+`setup` opens an **OpenTUI wizard** when the runtime supports it (Bun, or
+Node ≥ 26.4 with `--experimental-ffi`; if only `bun` is on PATH it is used
+automatically). Without either it falls back to classic text prompts.
+Use `--no-tui` to force the classic prompts.
+
 That single `setup` wizard:
 
 1. Creates the **standardized home directory** (`~/.disk-agent` or `$XDG_DATA_HOME/disk-agent`)
 2. Seeds workspace identity files + built-in skills
-3. **Prompts** for agent name, model, Telegram bot token (from [@BotFather](https://t.me/BotFather)), owner id, coding cwd
+3. Collects agent name, model, Telegram bot token (from [@BotFather](https://t.me/BotFather)), owner id, coding cwd — with **model/provider import from Pi** (`~/.pi/agent/auth.json` + `models-store.json`): pick Pi's configured default or any authed provider's model instead of typing it
 4. Installs the **Pi** CLI if missing (`@earendil-works/pi-coding-agent`)
 5. Installs Pi extensions: **pi-supergrok**, **pi-agent-browser-native**, **@tavily/pi-extension**
 6. Installs **[agent-browser](https://agent-browser.dev/)** globally and runs `agent-browser install` (Chrome)
-7. Walks you through **SuperGrok / X Premium OAuth** (or skips if tokens / `XAI_API_KEY` already exist)
+7. Walks you through **SuperGrok / X Premium OAuth** or **OpenCode Go API key** (or skips if tokens / `XAI_API_KEY` already exist)
 
 For Tavily web search, set `TAVILY_API_KEY` in `~/.disk-agent/.env` (or the process env).
 

@@ -17,6 +17,16 @@ Two schema libraries, deliberately: **zod** validates the YAML config
 expects). Don't cross them. Formatting is enforced by **Biome** (`biome.json`) —
 2-space, double quotes, semicolons, trailing commas, 100 cols.
 
+## Docs contract (keep these current)
+
+- **AGENTS.md is the map agents read first.** When you change architecture,
+  commands, conventions, or add/rename a module, update this file in the same
+  change — not "later". Stale maps cause agents to miss things.
+- **CHANGELOG.md records user-visible changes** (new flags, behaviors, fixes,
+  dependency adds) under `## Unreleased` or the next version. Anything a user
+  could notice goes in; maintenance-only refactors can skip it.
+- **ROADMAP.md holds planned work.** Move an item to CHANGELOG.md when it ships.
+
 ## Architecture (one glance)
 
 ```
@@ -35,7 +45,7 @@ Telegram / CLI  →  Gateway  →  AgentRuntime (Pi session)
 | Pi session + system prompt | `src/agent/runtime.ts` |
 | Custom tools + **tool allowlist** | `src/agent/tools.ts` |
 | SuperGrok / Tavily extension paths | `src/agent/pi.ts` |
-| Setup / doctor | `src/setup.ts` |
+| Setup / doctor | `src/setup.ts` + `src/setup/` (`tui.ts` OpenTUI wizard, `pi-import.ts` Pi model/provider import) |
 | Config + dotenv | `src/config.ts` |
 | Path layout | `src/paths.ts` |
 | Telegram | `src/channels/telegram.ts` |
@@ -75,6 +85,23 @@ Home resolve order: `DISK_AGENT_HOME` → `$XDG_DATA_HOME/disk-agent` → `~/.di
 
 9. **`MEMORY.md` mirrors `facts.json`.** `saveFact` appends a line, `deleteFact` removes it. Any new fact mutation must maintain both or the agent reads deleted facts back out of its injected context.
 
+10. **Setup UI:** `disk-agent setup` opens an **OpenTUI wizard** (`src/setup/tui.ts`, raw
+    `@opentui/core` constructs — not the React bindings) when the runtime can create the
+    native renderer: Bun, or Node ≥ 26.4 with `--experimental-ffi`. Under older Node it
+    re-execs the same command under `bun` if on PATH, else falls back to classic readline
+    prompts; `--no-tui` forces the classic flow. Wizard values map to `SetupOptions`
+    (`tuiValuesToOptions`) and the run continues with `yes: true`.
+
+11. **Pi model/provider import** lives in `src/setup/pi-import.ts`: reads
+    `~/.pi/agent/auth.json` (provider keys), `models-store.json` (catalog), and
+    `settings.json` (Pi's `defaultProvider`/`defaultModel`). Prefers the pi SDK
+    (`ModelRuntime.create`, offline) with a raw-JSON fallback.
+
+12. **OpenTUI gotchas** (when editing `tui.ts`): `getRenderable(id)` only matches *direct*
+    children — use the Wizard's recursive `findById`; a destroyed renderable keeps receiving
+    keys until something else is focused, so every screen must focus its first focusable
+    (`focusRootId`). Select screens need that focus or `ITEM_SELECTED` never fires.
+
 ## State & concurrency conventions
 
 - **All JSON state goes through `writeJson` / `writeFileAtomic`** (`utils.ts`) — temp file + `rename`. Never `writeFileSync` a state file directly; a crash mid-write corrupts it.
@@ -96,7 +123,7 @@ npm run lint           # biome lint
 npm run check          # biome lint + format check
 npm run format         # biome format --write
 
-disk-agent setup       # first-run: home, Telegram, Tavily key, Pi, extensions
+disk-agent setup       # OpenTUI wizard (re-execs under bun if needed); --no-tui = classic prompts
 disk-agent doctor      # health check
 disk-agent update      # npm self-update + restart gateway
 disk-agent gateway start|stop|restart|status
@@ -104,7 +131,9 @@ disk-agent chat        # local REPL
 ```
 
 Run `npm run typecheck && npm test` before handing work back — both take seconds.
-No CI exists yet, so these are local-only.
+CI (`.github/workflows/ci.yml`) runs typecheck + biome + build + tests on Node 20/22/24,
+plus the full suite under Bun — the OpenTUI wizard tests in `test/setup-tui.test.ts` need
+Bun's native FFI renderer and skip under plain Node. Run them locally with `bun test`.
 
 ## Testing
 
@@ -115,8 +144,9 @@ Anything touching disk uses `mkdtempSync(join(tmpdir(), …))` in `beforeEach` a
 to the real `~/.disk-agent`.
 
 Covered: `daemon`, `utils`, `memory/store`, `session/manager`, `update`, format
-and voice helpers. **Untested — edit with care:** `gateway.ts`,
-`agent/runtime.ts`, `channels/telegram.ts`.
+and voice helpers; `setup/pi-import` (pure, any Node) and `setup/tui` wizard
+walkthrough (Bun only — native renderer). **Untested — edit with care:**
+`gateway.ts`, `agent/runtime.ts`, `channels/telegram.ts`.
 
 ## Adding something new
 
@@ -126,6 +156,7 @@ and voice helpers. **Untested — edit with care:** `gateway.ts`,
 | New Pi extension | Resolve path in `pi.ts`, include in `resolveAgentExtensionPaths()`, allowlist tool names, optional setup/doctor |
 | New env secret | `upsertEnv` / prompt in `setup.ts`, document in `writeEnvExample` (`config.ts`), read via `process.env` after `loadConfig` |
 | New CLI command | `src/cli.ts` → call into gateway/setup/domain modules |
+| Setup wizard screen / option | Screens + state in `src/setup/tui.ts`; pure logic in `src/setup/pi-import.ts`; wire into `runSetup` in `setup.ts` + `SetupOptions`; test in `test/setup-tui.test.ts` (Bun) |
 
 ## Don’t
 

@@ -196,7 +196,6 @@ export function runUpdate(opts: UpdateOptions = {}): UpdateResult {
   const latestVersion = fetchRegistryVersion(tag);
 
   if (opts.check) {
-    const target = latestVersion ?? tag;
     const upToDate = latestVersion != null && latestVersion === previousVersion;
     return {
       ok: true,

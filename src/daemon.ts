@@ -193,10 +193,10 @@ export function startDaemon(opts: StartDaemonOptions = {}): {
     };
   }
 
-  writeFileSync(pidFilePath(paths.home), String(child.pid) + "\n", "utf8");
+  writeFileSync(pidFilePath(paths.home), `${String(child.pid)}\n`, "utf8");
   writeFileSync(
     daemonMetaPath(paths.home),
-    JSON.stringify(
+    `${JSON.stringify(
       {
         pid: child.pid,
         startedAt: new Date().toISOString(),
@@ -205,7 +205,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): {
       },
       null,
       2,
-    ) + "\n",
+    )}\n`,
     "utf8",
   );
 
@@ -331,10 +331,10 @@ function sleepSync(ms: number): void {
 
 export function writeRuntimePid(dataDir: string): void {
   const pid = process.pid;
-  writeFileSync(pidFilePath(dataDir), String(pid) + "\n", "utf8");
+  writeFileSync(pidFilePath(dataDir), `${String(pid)}\n`, "utf8");
   writeFileSync(
     daemonMetaPath(dataDir),
-    JSON.stringify(
+    `${JSON.stringify(
       {
         pid,
         startedAt: new Date().toISOString(),
@@ -342,7 +342,7 @@ export function writeRuntimePid(dataDir: string): void {
       },
       null,
       2,
-    ) + "\n",
+    )}\n`,
     "utf8",
   );
 

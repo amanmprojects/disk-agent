@@ -63,7 +63,7 @@ export function writeFileAtomic(path: string, content: string): void {
 }
 
 export function writeJson(path: string, data: unknown): void {
-  writeFileAtomic(path, JSON.stringify(data, null, 2) + "\n");
+  writeFileAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
 }
 
 export function readText(path: string): string | null {

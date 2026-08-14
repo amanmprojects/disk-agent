@@ -61,7 +61,10 @@ export function plainToTelegramHtml(input: string): string {
   s = s.replace(/\*([^*\n]+)\*/g, "<i>$1</i>");
 
   // 6. Restore protected segments
+  // NUL is an intentional sentinel (see protect() above) — it cannot appear in message text.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: NUL sentinel for protected segments
   s = s.replace(/\u0000C(\d+)\u0000/g, (_m, i: string) => codes[Number(i)] ?? "");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: NUL sentinel for protected segments
   s = s.replace(/\u0000F(\d+)\u0000/g, (_m, i: string) => fences[Number(i)] ?? "");
 
   return s;
@@ -138,5 +141,5 @@ export function formatCronHtml(name: string, body: string): string {
 }
 
 function clip(s: string, n: number): string {
-  return s.length <= n ? s : s.slice(0, n - 1) + "…";
+  return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
 }

@@ -1118,7 +1118,7 @@ ${opts.bootstrap}
 }
 
 function truncate(s: string, n: number): string {
-  return s.length <= n ? s : s.slice(0, n - 1) + "…";
+  return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
 }
 
 export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -1155,9 +1155,9 @@ function mapThinking(level: string): ThinkingEffort {
 
 function formatUsageBar(percent: number | null, width = 20): string {
   if (percent == null || !Number.isFinite(percent)) {
-    return "[" + "?".repeat(width) + "]";
+    return `[${"?".repeat(width)}]`;
   }
   const p = Math.max(0, Math.min(100, percent));
   const filled = Math.round((p / 100) * width);
-  return "[" + "█".repeat(filled) + "░".repeat(width - filled) + "]";
+  return `[${"█".repeat(filled)}${"░".repeat(width - filled)}]`;
 }
