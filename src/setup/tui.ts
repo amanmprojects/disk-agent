@@ -27,16 +27,15 @@ import { collectPiModels, type PiModelCandidate, type PiModelInfo } from "./pi-i
 /** Values the wizard collected. Merged into SetupOptions by runSetup. */
 export interface TuiValues {
   agentName: string;
-  /** provider/id, e.g. "supergrok/grok-4.5" or "opencode-go/deepseek-v4-flash". */
+  /** provider/id, e.g. "opencode-go/deepseek-v4-flash". */
   model?: string;
   cwd?: string;
   telegramToken?: string;
   ownerId?: string;
-  tavilyApiKey?: string;
   skipPi: boolean;
   skipBrowser: boolean;
   skipLogin: boolean;
-  loginProvider?: "supergrok" | "opencode-go";
+  loginProvider?: "opencode-go";
 }
 
 export interface TuiOutcome {
@@ -52,14 +51,13 @@ export interface TuiExistingValues {
   cwd: string;
   telegramToken?: string;
   ownerId?: string;
-  tavilyApiKey?: string;
 }
 
 /** What credentials already exist (shown on the auth screen). */
 export interface TuiAuthInfo {
   /** Providers with credentials in ~/.pi/agent/auth.json. */
   providers: string[];
-  /** Relevant env keys that are set (XAI_API_KEY, OPENCODE_API_KEY, …). */
+  /** Relevant env keys that are set (OPENCODE_API_KEY, ANTHROPIC_API_KEY, …). */
   envKeys: string[];
 }
 
@@ -153,11 +151,10 @@ interface WizardState {
   manualModel: boolean;
   telegramToken?: string;
   ownerId?: string;
-  tavilyApiKey?: string;
   skipPi: boolean;
   skipBrowser: boolean;
   skipLogin: boolean;
-  loginProvider?: "supergrok" | "opencode-go";
+  loginProvider?: "opencode-go";
 }
 
 /** Builds the fixed "existing value" context for prefill + hints. */
@@ -169,11 +166,10 @@ function stateFrom(ctx: TuiContext): WizardState {
     manualModel: false,
     telegramToken: ctx.existing.telegramToken,
     ownerId: ctx.existing.ownerId,
-    tavilyApiKey: ctx.existing.tavilyApiKey,
     skipPi: false,
     skipBrowser: false,
     skipLogin: false,
-    loginProvider: "supergrok",
+    loginProvider: "opencode-go",
   };
 }
 
@@ -261,12 +257,11 @@ export class Wizard {
       () => this.agentScreen(),
       () => this.modelScreen(),
       () => this.telegramScreen(),
-      () => this.tavilyScreen(),
       () =>
         this.componentScreen(
           "pi",
           "Install Pi CLI + extensions",
-          ["pi-supergrok (SuperGrok OAuth), pi-agent-browser-native, @tavily/pi-extension"],
+          ["pi-web-search (provider-native web search), pi-agent-browser-native"],
           () => this.state.skipPi,
         ),
       () =>
@@ -319,7 +314,6 @@ export class Wizard {
       cwd: s.cwd.trim() || undefined,
       telegramToken: s.telegramToken?.trim() || undefined,
       ownerId: s.ownerId?.trim() || undefined,
-      tavilyApiKey: s.tavilyApiKey?.trim() || undefined,
       skipPi: s.skipPi,
       skipBrowser: s.skipBrowser,
       skipLogin: s.skipLogin,
@@ -357,7 +351,7 @@ export class Wizard {
         }),
         Text({ content: " " }),
         Text({ content: "This wizard configures your agent home, default model/provider," }),
-        Text({ content: "Telegram, Tavily web search, and the Pi integrations to install." }),
+        Text({ content: "Telegram, and the Pi integrations to install." }),
         Text({ content: " " }),
         Text({
           content: "  · model & provider can be imported from Pi (~/.pi/agent/auth.json)",
@@ -454,7 +448,7 @@ export class Wizard {
       const input = this.labeledInput(
         "model-manual-input",
         "provider/model:",
-        "supergrok/grok-4.5",
+        "opencode-go/grok-4.5",
         "",
         {
           onEnter: (value) => {
@@ -470,7 +464,8 @@ export class Wizard {
         "Model — manual",
         [
           Text({
-            content: "Type a provider/model id (e.g. supergrok/grok-4.5, opencode-go/kimi-k2.6).",
+            content:
+              "Type a provider/model id (e.g. opencode-go/grok-4.5, anthropic/claude-sonnet-4-20250514).",
             fg: C.label,
           }),
           input,
@@ -597,35 +592,6 @@ export class Wizard {
     );
   }
 
-  private tavilyScreen(): VChild {
-    const existing = this.state.tavilyApiKey;
-    const input = this.labeledInput(
-      "tavily-input",
-      "Tavily key:",
-      "tvly-… from app.tavily.com",
-      "",
-      {
-        showExisting: existing ? `existing: ${mask(existing)} (leave empty to keep)` : undefined,
-        onEnter: (value) => {
-          if (value.trim()) this.state.tavilyApiKey = value.trim();
-          this.next();
-        },
-      },
-    );
-    return this.shell(
-      "Tavily web search (optional)",
-      [
-        Text({ content: "Enables web_search + web_fetch via @tavily/pi-extension.", fg: C.label }),
-        Text({
-          content: "Get a key at https://app.tavily.com  —  leave empty to skip.",
-          fg: C.label,
-        }),
-        input,
-      ],
-      "Enter  continue   ·   Esc  back",
-    );
-  }
-
   private componentScreen(
     id: string,
     title: string,
@@ -669,11 +635,6 @@ export class Wizard {
   private authScreen(): VChild {
     const options: SelectOption[] = [
       {
-        name: "supergrok",
-        description: "SuperGrok / X Premium OAuth (pi-supergrok)",
-        value: "supergrok",
-      },
-      {
         name: "opencode-go",
         description: "OpenCode Go subscription (API key, opencode.ai)",
         value: "opencode-go",
@@ -684,9 +645,9 @@ export class Wizard {
     const select = Select({
       id: "auth-select",
       width: WIDTH,
-      height: 5,
+      height: 4,
       options,
-      selectedIndex: this.state.loginProvider === "opencode-go" ? 1 : 0,
+      selectedIndex: 0,
       showDescription: true,
       selectedBackgroundColor: "#2E3A4A",
       selectedTextColor: C.accent,
@@ -699,7 +660,7 @@ export class Wizard {
         this.state.loginProvider = undefined;
       } else {
         this.state.skipLogin = false;
-        this.state.loginProvider = option.value as "supergrok" | "opencode-go";
+        this.state.loginProvider = option.value as "opencode-go";
       }
       this.next();
     });
@@ -739,10 +700,9 @@ export class Wizard {
       ["Working dir", s.cwd.trim() || "(default)"],
       ["Telegram", s.telegramToken?.trim() ? `configured (${mask(s.telegramToken)})` : "not set"],
       ["Owner", s.ownerId?.trim() || "—"],
-      ["Tavily", s.tavilyApiKey?.trim() ? `configured (${mask(s.tavilyApiKey)})` : "not set"],
       ["Pi CLI + extensions", s.skipPi ? "skip" : "install"],
       ["agent-browser", s.skipBrowser ? "skip" : "install + Chrome"],
-      ["Auth", s.skipLogin ? "skip" : String(s.loginProvider ?? "supergrok")],
+      ["Auth", s.skipLogin ? "skip" : String(s.loginProvider ?? "opencode-go")],
     ];
     return this.shell(
       "Review & run",

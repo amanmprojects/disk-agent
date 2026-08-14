@@ -1,11 +1,9 @@
 export {
-  bootstrapSupergrok,
   getSharedModelRuntime,
   piAgentDir,
   resolveAgentExtensionPaths,
   resolveModel,
-  resolveSupergrokExtension,
-  resolveTavilyExtension,
+  resolveWebSearchExtension,
 } from "./agent/pi.js";
 export { AgentRuntime, normalizeThinkingLevel, type ThinkingEffort } from "./agent/runtime.js";
 export { authStatus, hasAnyAuth, loginProvider } from "./auth/login.js";

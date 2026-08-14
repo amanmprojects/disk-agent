@@ -36,10 +36,6 @@ const MAX_MODELS_PER_PROVIDER = 5;
 
 /** Static presets so the model picker always offers something sane. */
 export const MODEL_PRESETS: Array<[string, string]> = [
-  ["supergrok", "grok-4.5"],
-  ["supergrok", "grok-4.3"],
-  ["supergrok", "grok-composer-2.5-fast"],
-  ["xai", "grok-4"],
   ["opencode-go", "grok-4.5"],
   ["opencode-go", "kimi-k2.6"],
   ["opencode", "claude-sonnet-4-5"],

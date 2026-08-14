@@ -18,9 +18,6 @@ is a backlog, not a promise.
       unguarded; wrap it in a short deadline and lean on the raw-JSON fallback.
 - [ ] **Model picker search/filter** — Pi catalogs can hold hundreds of models; the picker
       currently caps at 5 per provider with no way to search.
-- [ ] **SuperGrok catalog before first login** — supergrok models only land in
-      `models-store.json` after pi logs in once; seeding known ids would make the picker
-      useful before auth.
 - [ ] **Verify the Node ≥ 26.4 + `--experimental-ffi` path** — only the Bun renderer path
       is exercised by tests/CI today; run the wizard natively under Node 26 once and fix
       any quirks.
@@ -45,7 +42,7 @@ is a backlog, not a promise.
       destroyed renderables retaining key focus forced workarounds in `tui.ts`
       (`findById`, `focusRootId`); revisit when upstream changes.
 - [ ] **Shared secret vault story** — auth lives in `~/.pi/agent/auth.json` by design, but
-      `~/.disk-agent/.env` still holds Telegram/Tavily keys in plaintext; evaluate
+      `~/.disk-agent/.env` still holds Telegram keys in plaintext; evaluate
       keyring integration as an opt-in.
 
 ## Product ideas

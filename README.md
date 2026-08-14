@@ -40,21 +40,20 @@ That single `setup` wizard:
 2. Seeds workspace identity files + built-in skills
 3. Collects agent name, model, Telegram bot token (from [@BotFather](https://t.me/BotFather)), owner id, coding cwd — with **model/provider import from Pi** (`~/.pi/agent/auth.json` + `models-store.json`): pick Pi's configured default or any authed provider's model instead of typing it
 4. Installs the **Pi** CLI if missing (`@earendil-works/pi-coding-agent`)
-5. Installs Pi extensions: **pi-supergrok**, **pi-agent-browser-native**, **@tavily/pi-extension**
+5. Installs Pi extensions: **pi-web-search**, **pi-agent-browser-native**
 6. Installs **[agent-browser](https://agent-browser.dev/)** globally and runs `agent-browser install` (Chrome)
-7. Walks you through **SuperGrok / X Premium OAuth** or **OpenCode Go API key** (or skips if tokens / `XAI_API_KEY` already exist)
+7. Walks you through the **OpenCode Go API key** (or skips if a key already exists)
 
-For Tavily web search, set `TAVILY_API_KEY` in `~/.disk-agent/.env` (or the process env).
+Web search (`web_search` + `url_context`) comes from **pi-web-search** — provider-native, no extra API key needed: it uses the current model's provider (Google Gemini, OpenAI, or Anthropic).
 
 Non-interactive (CI / scripted):
 
 ```bash
 disk-agent setup --yes --skip-login \
   --telegram-token "123456:ABC..." \
-  --owner "your_telegram_user_id" \
-  --tavily-key "tvly-..."
+  --owner "your_telegram_user_id"
 # later:
-disk-agent login
+disk-agent login opencode-go --type api_key
 ```
 
 Flags:
@@ -62,12 +61,11 @@ Flags:
 ```bash
 disk-agent setup \
   --name Disk \
-  --model supergrok/grok-4.5 \
+  --model opencode-go/grok-4.5 \
   --telegram-token "123456:ABC..." \
   --owner "your_telegram_user_id" \
-  --tavily-key "tvly-..."   # optional: Tavily web_search / web_fetch \
   --skip-browser   # optional: skip agent-browser
-  --skip-login     # optional: skip SuperGrok OAuth
+  --skip-login     # optional: skip auth login
 ```
 
 Verify:
@@ -84,7 +82,7 @@ disk-agent status
 # secrets (if not passed to setup)
 $EDITOR ~/.disk-agent/.env
 # TELEGRAM_BOT_TOKEN=...
-# TAVILY_API_KEY=tvly-...
+# OPENCODE_API_KEY=oc_...
 
 # Detached (recommended on a VPS — survives logout)
 disk-agent gateway start
@@ -129,7 +127,7 @@ disk-agent setup
 | **Telegram channel** | grammY long-polling bot, pairing / allowlist / owner policies, group mention gate, chunked replies, **voice notes** (Whisper STT) |
 | **Memory** | OpenClaw-style `SOUL.md` / `USER.md` / `MEMORY.md` / daily `memory/YYYY-MM-DD.md` + searchable fact store |
 | **Cron + heartbeat** | Cron expressions, `every 30m`, `daily at 09:00`, one-shots; quiet hours; `HEARTBEAT_OK` suppression |
-| **Browser / web** | Tavily `web_search` / `web_fetch` (`@tavily/pi-extension`, needs `TAVILY_API_KEY`); `web_get` (fetch+HTML strip); full automation when [`agent-browser`](https://www.npmjs.com/package/agent-browser) is installed |
+| **Browser / web** | Provider-native `web_search` / `url_context` via [`pi-web-search`](https://pi.dev/packages/pi-web-search) (uses your model's provider — no extra key); `web_get` (fetch+HTML strip); full automation when [`agent-browser`](https://www.npmjs.com/package/agent-browser) is installed |
 | **Sessions** | Per-peer Pi session transcripts, `/new` archive+reset, `/sessions` + `/resume`, serialized lanes |
 | **Coding agent** | Full Pi toolset: read, bash, edit, write, grep, find, ls |
 | **Skills / identity** | Workspace + user skills under one home tree; bootstrap context each run |
@@ -140,16 +138,15 @@ Inspired by **OpenClaw**, **Hermes Agent**, and **Pi**.
 
 | Method | How |
 |--------|-----|
-| **SuperGrok / X Premium** (recommended) | `disk-agent setup` or `disk-agent login` → OAuth → `~/.pi/agent/auth.json` |
-| **xAI API key** | `export XAI_API_KEY=…` or put it in `~/.disk-agent/.env` |
-| **Other Pi providers** | `ANTHROPIC_API_KEY`, OpenAI Codex OAuth via `pi`, etc. |
+| **OpenCode Go / Zen** (recommended) | `disk-agent setup` or `disk-agent login opencode-go --type api_key` → `~/.pi/agent/auth.json` |
+| **Provider API keys** | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, … or put them in `~/.disk-agent/.env` |
 
-Auth is **not** stored under `~/.disk-agent` — it deliberately uses **`~/.pi/agent/auth.json`** so one SuperGrok login works for both `pi` and disk-agent.
+Auth is **not** stored under `~/.disk-agent` — it deliberately uses **`~/.pi/agent/auth.json`** so one login works for both `pi` and disk-agent.
 
 ```bash
-disk-agent login              # SuperGrok OAuth
-disk-agent login xai --type api_key
-disk-agent models             # should show supergrok/* with [auth]
+disk-agent login opencode-go --type api_key
+disk-agent login anthropic --type api_key
+disk-agent models             # should show provider models with [auth]
 ```
 
 ## Standardized directory layout
@@ -210,7 +207,7 @@ Built-ins seeded on setup: **create-skill**, **find-skills**, **remember**.
 
 ```
 disk-agent setup          Full bootstrap (home + pi + extensions + login)
-disk-agent login [prov]   SuperGrok / provider OAuth
+disk-agent login [prov]   Provider login (opencode-go API key, OAuth, …)
 disk-agent doctor         Health check
 disk-agent update         Update to latest npm version and restart the gateway
 disk-agent paths          Print directory layout
@@ -221,8 +218,8 @@ disk-agent gateway status Detached process status
 disk-agent gateway restart
 disk-agent chat           Interactive local REPL
 disk-agent pair <code>    Approve Telegram pairing
-disk-agent status         Config / SuperGrok auth status
-disk-agent models         List SuperGrok / xAI / other models
+disk-agent status         Config / auth status
+disk-agent models         List available models
 disk-agent sessions              List active conversation sessions
 disk-agent sessions history      List archived (previous) sessions
 disk-agent sessions resume <id>  Resume a previous session by id or .jsonl path
@@ -277,7 +274,7 @@ Primary file: `~/.disk-agent/config.yaml` (created by `setup`).
 agentName: Disk
 cwd: /home/you/code          # coding tools working directory
 model:
-  provider: supergrok
+  provider: opencode-go
   id: grok-4.5
   thinking: medium
 telegram:
@@ -299,7 +296,7 @@ logging:
   level: info
 ```
 
-Environment overrides: `TELEGRAM_BOT_TOKEN`, `DISK_AGENT_OWNER_ID`, `DISK_AGENT_MODEL`, `DISK_AGENT_PROVIDER`, `DISK_AGENT_HOME`, `DISK_AGENT_WORKSPACE`, `DISK_AGENT_CWD`, `XAI_API_KEY`, plus other provider API keys.
+Environment overrides: `TELEGRAM_BOT_TOKEN`, `DISK_AGENT_OWNER_ID`, `DISK_AGENT_MODEL`, `DISK_AGENT_PROVIDER`, `DISK_AGENT_HOME`, `DISK_AGENT_WORKSPACE`, `DISK_AGENT_CWD`, plus provider API keys (`OPENCODE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`).
 
 ### Telegram voice messages
 
@@ -330,8 +327,8 @@ Built-in (Pi): `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
 |------------|---------|
 | `memory_save` / `memory_search` / `memory_log` / `memory_delete` | Long-term + daily memory |
 | `cron_list` / `cron_add` / `cron_remove` / `cron_run` | Scheduler |
-| `web_search` | Tavily web search (`TAVILY_API_KEY`) |
-| `web_fetch` | Tavily extract from URLs |
+| `web_search` | Provider-native web search (pi-web-search — uses current model's provider) |
+| `url_context` | Gemini-only: analyze up to 20 URLs natively |
 | `web_get` | Fetch URL → text (plain HTTP) |
 | `browser_open` / `snapshot` / `click` / `fill` / `screenshot` | Browser automation |
 | `session_list` / `session_reset` / `session_resume` | Session management (list, archive, resume) |

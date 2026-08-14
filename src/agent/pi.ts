@@ -1,21 +1,12 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import {
-  type AgentSession,
-  createAgentSession,
-  DefaultResourceLoader,
-  getAgentDir,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../logger.js";
 
 const require = createRequire(import.meta.url);
 
 let runtimePromise: Promise<ModelRuntime> | null = null;
-let bootstrapPromise: Promise<void> | null = null;
 
 /**
  * Resolve a pi package extension entry by npm package name + relative path.
@@ -43,25 +34,20 @@ export function resolvePiPackageExtension(
   return null;
 }
 
-/** Resolve pi-supergrok extension entry (registers SuperGrok OAuth provider). */
-export function resolveSupergrokExtension(): string | null {
-  return resolvePiPackageExtension("pi-supergrok", "extensions/index.ts");
-}
-
-/** Resolve @tavily/pi-extension entry (registers web_search + web_fetch). */
-export function resolveTavilyExtension(): string | null {
-  return resolvePiPackageExtension("@tavily/pi-extension", "index.ts");
+/** Resolve pi-web-search extension entry (registers web_search + url_context). */
+export function resolveWebSearchExtension(): string | null {
+  return resolvePiPackageExtension("pi-web-search", "src/index.ts");
 }
 
 /** All extension entry paths disk-agent should load into each agent session. */
 export function resolveAgentExtensionPaths(): string[] {
-  const paths = [resolveSupergrokExtension(), resolveTavilyExtension()];
+  const paths = [resolveWebSearchExtension()];
   return paths.filter((p): p is string => Boolean(p));
 }
 
 /**
  * Shared ModelRuntime bound to the user's Pi agent dir (~/.pi/agent).
- * This reuses SuperGrok / xAI OAuth tokens from `pi /login` and XAI_API_KEY.
+ * This reuses provider credentials from `pi /login` (auth.json) and env keys.
  */
 export async function getSharedModelRuntime(log?: Logger): Promise<ModelRuntime> {
   if (!runtimePromise) {
@@ -75,15 +61,6 @@ export async function getSharedModelRuntime(log?: Logger): Promise<ModelRuntime>
       });
 
       // Optional env overrides (API key path — not needed if OAuth is present)
-      if (process.env.XAI_API_KEY) {
-        await rt.setRuntimeApiKey("xai", process.env.XAI_API_KEY);
-        // Also set on supergrok if provider expects same key style
-        try {
-          await rt.setRuntimeApiKey("supergrok", process.env.XAI_API_KEY);
-        } catch {
-          /* provider may not exist yet */
-        }
-      }
       if (process.env.ANTHROPIC_API_KEY) {
         await rt.setRuntimeApiKey("anthropic", process.env.ANTHROPIC_API_KEY);
       }
@@ -113,90 +90,6 @@ export async function getSharedModelRuntime(log?: Logger): Promise<ModelRuntime>
   return runtimePromise;
 }
 
-/**
- * Load pi-supergrok so `supergrok` provider + models are registered.
- * Safe to call multiple times.
- */
-export async function bootstrapSupergrok(log?: Logger): Promise<{
-  loaded: boolean;
-  extensionPath: string | null;
-  providers: string[];
-}> {
-  if (!bootstrapPromise) {
-    bootstrapPromise = (async () => {
-      const modelRuntime = await getSharedModelRuntime(log);
-      // Already registered?
-      if (
-        modelRuntime.getProvider("supergrok") ||
-        modelRuntime.getRegisteredProviderIds().includes("supergrok")
-      ) {
-        log?.debug("supergrok already registered");
-        return;
-      }
-
-      const ext = resolveSupergrokExtension();
-      if (!ext) {
-        log?.warn(
-          "pi-supergrok not found. Install with: npm i pi-supergrok  (or pi install npm:pi-supergrok)",
-        );
-        return;
-      }
-
-      const agentDir = getAgentDir();
-      const settingsManager = SettingsManager.inMemory
-        ? SettingsManager.inMemory()
-        : SettingsManager.create(process.cwd(), agentDir);
-
-      const resourceLoader = new DefaultResourceLoader({
-        cwd: process.cwd(),
-        agentDir,
-        settingsManager,
-        additionalExtensionPaths: [ext],
-      });
-      await resourceLoader.reload();
-
-      // Creating a short-lived session runs extension factories (registerProvider).
-      const { session } = await createAgentSession({
-        cwd: process.cwd(),
-        agentDir,
-        modelRuntime,
-        resourceLoader,
-        settingsManager,
-        sessionManager: SessionManager.inMemory(),
-        tools: [],
-        noTools: "all",
-      });
-      session.dispose();
-
-      // Re-apply XAI key after provider registration if present
-      if (process.env.XAI_API_KEY) {
-        try {
-          await modelRuntime.setRuntimeApiKey("supergrok", process.env.XAI_API_KEY);
-        } catch {
-          /* ignore */
-        }
-      }
-
-      log?.info("pi-supergrok loaded", { extension: ext });
-    })().catch((err) => {
-      // Allow retry on next call
-      bootstrapPromise = null;
-      throw err;
-    });
-  }
-
-  await bootstrapPromise;
-  const modelRuntime = await getSharedModelRuntime(log);
-  return {
-    loaded: Boolean(
-      modelRuntime.getProvider("supergrok") ||
-        modelRuntime.getRegisteredProviderIds().includes("supergrok"),
-    ),
-    extensionPath: resolveSupergrokExtension(),
-    providers: [...modelRuntime.getRegisteredProviderIds()],
-  };
-}
-
 export type ResolvedModel = {
   provider: string;
   id: string;
@@ -204,14 +97,13 @@ export type ResolvedModel = {
 };
 
 /**
- * Resolve a model with SuperGrok-first fallbacks.
- * Accepts "supergrok/grok-4.5", "xai/grok-4", or bare ids.
+ * Resolve a model with opencode-go-first fallbacks.
+ * Accepts "opencode-go/grok-4.5", "anthropic/claude-sonnet-4-20250514", or bare ids.
  */
 export async function resolveModel(
   preferred: { provider: string; id: string },
   log?: Logger,
 ): Promise<ResolvedModel> {
-  await bootstrapSupergrok(log);
   const rt = await getSharedModelRuntime(log);
 
   const tryFind = (provider: string, id: string) => {
@@ -224,25 +116,20 @@ export async function resolveModel(
   let hit = tryFind(preferred.provider, preferred.id);
   if (hit) return hit;
 
-  // If user asked for anthropic default but has SuperGrok, prefer it
+  // Fallbacks across built-in pi providers
   const candidates: Array<[string, string]> = [
     [preferred.provider, preferred.id],
-    ["supergrok", preferred.id],
-    ["supergrok", "grok-4.5"],
-    ["supergrok", "grok-4.3"],
-    ["supergrok", "grok-4.20-0309-reasoning"],
-    ["supergrok", "grok-composer-2.5-fast"],
-    ["supergrok", "grok-build-0.1"],
     ["opencode-go", preferred.id],
-    ["opencode-go", "kimi-k2.6"],
     ["opencode-go", "grok-4.5"],
+    ["opencode-go", "kimi-k2.6"],
+    ["opencode", preferred.id],
     ["opencode", "kimi-k2.6"],
     ["opencode", "claude-sonnet-4-5"],
-    ["xai", preferred.id],
-    ["xai", "grok-4"],
-    ["xai", "grok-code-fast-1"],
     ["openai-codex", "gpt-5.4"],
+    ["openai", "gpt-5.4"],
     ["anthropic", "claude-sonnet-4-20250514"],
+    ["google", "gemini-2.5-pro"],
+    ["google", "gemini-3-pro-preview"],
   ];
 
   // Prefer models that have auth configured
@@ -298,11 +185,9 @@ export async function resolveModel(
       `Credentials: ${creds}`,
       ``,
       `Fix one of:`,
-      `  1. SuperGrok/X subscription: run \`pi\`, then /login supergrok  (uses ~/.pi/agent/auth.json)`,
-      `  2. OpenCode Go subscription: disk-agent login opencode-go --type api_key  (or export OPENCODE_API_KEY=...)`,
-      `  3. xAI API key: export XAI_API_KEY=...`,
-      `  4. Other key: ANTHROPIC_API_KEY / OPENAI_API_KEY`,
-      `  5. Ensure pi-supergrok is installed: npm i pi-supergrok`,
+      `  1. OpenCode Go subscription: disk-agent login opencode-go --type api_key  (or export OPENCODE_API_KEY=...)`,
+      `  2. API key: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY`,
+      `  3. Run \`pi\`, pick a provider there, and log in (uses ~/.pi/agent/auth.json)`,
     ].join("\n"),
   );
 }
@@ -311,4 +196,4 @@ export function piAgentDir(): string {
   return getAgentDir();
 }
 
-export type { AgentSession, ModelRuntime };
+export type { ModelRuntime };

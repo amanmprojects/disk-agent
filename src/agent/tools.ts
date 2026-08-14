@@ -48,8 +48,8 @@ export const DISK_TOOL_NAMES = [
   ...SKILL_TOOL_NAMES,
 ] as const;
 
-/** Tools registered by @tavily/pi-extension (must be on the Pi tools allowlist). */
-export const TAVILY_TOOL_NAMES = ["web_search", "web_fetch"] as const;
+/** Tools registered by pi-web-search (must be on the Pi tools allowlist). */
+export const WEB_SEARCH_TOOL_NAMES = ["web_search", "url_context"] as const;
 
 export const BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 
@@ -57,7 +57,7 @@ export const BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "fin
 export const ALL_AGENT_TOOL_NAMES: string[] = [
   ...BUILTIN_TOOL_NAMES,
   ...DISK_TOOL_NAMES,
-  ...TAVILY_TOOL_NAMES,
+  ...WEB_SEARCH_TOOL_NAMES,
 ];
 
 /**

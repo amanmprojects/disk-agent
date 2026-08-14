@@ -1,8 +1,8 @@
 /**
  * One-command interactive setup:
  *   home layout → config (Telegram, model, …) → Pi CLI →
- *   Pi extensions (pi-supergrok, pi-agent-browser-native) →
- *   agent-browser CLI + Chrome → SuperGrok login
+ *   Pi extensions (pi-web-search, pi-agent-browser-native) →
+ *   agent-browser CLI + Chrome → OpenCode Go login
  */
 
 import { spawnSync } from "node:child_process";
@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
-import { resolveSupergrokExtension, resolveTavilyExtension } from "./agent/pi.js";
+import { resolveWebSearchExtension } from "./agent/pi.js";
 import { hasAnyAuth, loginProvider } from "./auth/login.js";
 import { type AppConfig, bootstrapHome, loadConfig, saveConfig } from "./config.js";
 import {
@@ -32,15 +32,10 @@ const require = createRequire(import.meta.url);
 
 /**
  * Default Pi packages installed during setup.
- * - pi-supergrok: SuperGrok / xAI OAuth provider
+ * - pi-web-search: provider-native web_search + url_context (no API key needed)
  * - pi-agent-browser-native: exposes agent-browser as a native Pi tool
- * - @tavily/pi-extension: web_search + web_fetch (needs TAVILY_API_KEY)
  */
-export const DEFAULT_PI_PACKAGES = [
-  "npm:pi-supergrok",
-  "npm:pi-agent-browser-native",
-  "npm:@tavily/pi-extension",
-] as const;
+export const DEFAULT_PI_PACKAGES = ["npm:pi-web-search", "npm:pi-agent-browser-native"] as const;
 
 /** Docs: https://agent-browser.dev/ */
 export const AGENT_BROWSER_DOCS = "https://agent-browser.dev/";
@@ -52,18 +47,16 @@ export interface SetupOptions {
   model?: string;
   telegramToken?: string;
   ownerId?: string;
-  /** Tavily API key for web_search / web_fetch */
-  tavilyApiKey?: string;
   /** Skip ensuring pi CLI / packages */
   skipPi?: boolean;
   /** Skip agent-browser CLI + Chrome download */
   skipBrowser?: boolean;
-  /** Skip SuperGrok/OpenCode login prompt */
+  /** Skip login prompt */
   skipLogin?: boolean;
-  /** Force SuperGrok OAuth even if already authenticated */
+  /** Force login even if already authenticated */
   forceLogin?: boolean;
   /** Auth provider for the login step (with --yes or to skip the choice prompt) */
-  loginProvider?: "supergrok" | "opencode-go";
+  loginProvider?: "opencode-go";
   /** Non-interactive: no prompts; skip optional login/browser confirm unless forced */
   yes?: boolean;
   /** Explicitly request login (with --yes) */
@@ -91,8 +84,7 @@ export interface SetupResult {
     detail: string;
   };
   telegram: { configured: boolean };
-  tavily: { configured: boolean };
-  supergrokExtension: string | null;
+  webSearchExtension: string | null;
   auth: { attempted: boolean; ok: boolean; detail: string };
   version: string;
 }
@@ -495,7 +487,6 @@ function tuiValuesToOptions(v: TuiValues): SetupOptions {
     cwd: v.cwd,
     telegramToken: v.telegramToken,
     ownerId: v.ownerId,
-    tavilyApiKey: v.tavilyApiKey,
     skipPi: v.skipPi,
     skipBrowser: v.skipBrowser,
     skipLogin: v.skipLogin,
@@ -513,8 +504,7 @@ function cancelledResult(version: string, paths: DiskAgentPaths): SetupResult {
     pi: { binary: null, installed: false, packages: [], agentDir },
     browser: { cli: null, installed: false, chromeOk: false, detail: "cancelled" },
     telegram: { configured: false },
-    tavily: { configured: false },
-    supergrokExtension: null,
+    webSearchExtension: null,
     auth: { attempted: false, ok: false, detail: "cancelled" },
     version,
   };
@@ -534,13 +524,12 @@ function resolveExistingValues(
   cwd: string;
   telegramToken?: string;
   ownerId?: string;
-  tavilyApiKey?: string;
 } {
   // Prefill the model from Pi's configured default when nothing is set yet
-  // and the config still has the stock supergrok/grok-4.5 default.
+  // and the config still has the stock opencode-go/grok-4.5 default.
   const cfgDefault = `${cfg.model.provider}/${cfg.model.id}`;
   let model = opts.model || process.env.DISK_AGENT_MODEL || cfgDefault;
-  if (!opts.model && !process.env.DISK_AGENT_MODEL && cfgDefault === "supergrok/grok-4.5") {
+  if (!opts.model && !process.env.DISK_AGENT_MODEL && cfgDefault === "opencode-go/grok-4.5") {
     const pi = readPiDefault(piSettingsPath());
     if (pi.provider && pi.model) model = `${pi.provider}/${pi.model}`;
   }
@@ -559,15 +548,11 @@ function resolveExistingValues(
       cfg.telegram.ownerId ||
       process.env.DISK_AGENT_OWNER_ID ||
       readEnvValue(paths.envFile, "DISK_AGENT_OWNER_ID"),
-    tavilyApiKey:
-      opts.tavilyApiKey ||
-      process.env.TAVILY_API_KEY ||
-      readEnvValue(paths.envFile, "TAVILY_API_KEY"),
   };
 }
 
 /**
- * Interactive prompts for agent name, model, Telegram, Tavily, owner, cwd.
+ * Interactive prompts for agent name, model, Telegram, owner, cwd.
  * Flags / existing env take precedence; --yes skips prompts (keeps defaults / flags).
  */
 async function collectUserConfig(
@@ -579,7 +564,6 @@ async function collectUserConfig(
   model?: string;
   telegramToken?: string;
   ownerId?: string;
-  tavilyApiKey?: string;
   cwd?: string;
 }> {
   const existing = resolveExistingValues(cfg, paths, opts);
@@ -589,7 +573,6 @@ async function collectUserConfig(
     cwd: existingCwd,
     telegramToken: existingToken,
     ownerId: existingOwner,
-    tavilyApiKey: existingTavily,
   } = existing;
 
   if (opts.yes || !isInteractive()) {
@@ -598,7 +581,6 @@ async function collectUserConfig(
       model: opts.model || existingModel,
       telegramToken: existingToken,
       ownerId: existingOwner,
-      tavilyApiKey: existingTavily,
       cwd: opts.cwd || existingCwd,
     };
   }
@@ -639,27 +621,11 @@ async function collectUserConfig(
     });
   }
 
-  console.log("");
-  console.log(chalk.dim("  Tavily web search (optional — https://app.tavily.com for an API key)"));
-  console.log(chalk.dim("  Enables web_search + web_fetch via @tavily/pi-extension"));
-  let tavilyApiKey = existingTavily;
-  if (existingTavily) {
-    ok(`tavily:    existing key detected (${maskSecret(existingTavily)})`);
-    if (await confirm("Replace Tavily API key?", false)) {
-      tavilyApiKey = await ask("TAVILY_API_KEY", { secret: true });
-    }
-  } else {
-    tavilyApiKey = await ask("TAVILY_API_KEY (leave empty to skip)", {
-      secret: true,
-    });
-  }
-
   return {
     agentName: agentName || "Disk",
     model: model || existingModel,
     telegramToken: telegramToken || undefined,
     ownerId: ownerId || undefined,
-    tavilyApiKey: tavilyApiKey || undefined,
     cwd: cwd || existingCwd,
   };
 }
@@ -701,8 +667,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       const existing = resolveExistingValues(bootstrapCfg, paths, opts);
       const auth = {
         providers: readPiAuthProviders(piAuthPath()),
-        envKeys: ["XAI_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"].filter(
-          (k) => Boolean(process.env[k]?.trim()),
+        envKeys: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"].filter((k) =>
+          Boolean(process.env[k]?.trim()),
         ),
       };
       const outcome = await runTuiSetup({ version, existing, piInfo, auth });
@@ -721,8 +687,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   console.log(chalk.bold.cyan(`\nDisk Agent v${version} — setup\n`));
   console.log(
     chalk.dim(
-      "This wizard installs Pi, SuperGrok, Tavily, agent-browser, and configures home + Telegram.\n" +
-        "Auth: SuperGrok/X subscription (OAuth) or OpenCode Go subscription (API key).\n",
+      "This wizard installs Pi, pi-web-search, agent-browser, and configures home + Telegram.\n" +
+        "Auth: OpenCode Go subscription (API key, opencode.ai) or your own provider keys.\n",
     ),
   );
 
@@ -745,8 +711,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
         .join("\n"),
   );
 
-  // ── 2. Interactive config (Telegram, Tavily, model, …) ──────────────────
-  step(2, total, "Agent, Telegram & Tavily configuration");
+  // ── 2. Interactive config (Telegram, model, …) ──────────────────────────
+  step(2, total, "Agent, Telegram & model configuration");
   const user = await collectUserConfig(cfg, paths, opts);
 
   cfg.agentName = user.agentName;
@@ -764,11 +730,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     DISK_AGENT_OWNER_ID: user.ownerId,
     DISK_AGENT_MODEL: user.model || `${cfg.model.provider}/${cfg.model.id}`,
     DISK_AGENT_CWD: user.cwd,
-    TAVILY_API_KEY: user.tavilyApiKey,
   });
-  if (user.tavilyApiKey) {
-    process.env.TAVILY_API_KEY = user.tavilyApiKey;
-  }
 
   ok(`agent:     ${cfg.agentName}`);
   ok(`model:     ${cfg.model.provider}/${cfg.model.id}`);
@@ -778,11 +740,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     if (user.ownerId) ok(`owner:     ${user.ownerId}`);
   } else {
     warn(`telegram:  not configured — add TELEGRAM_BOT_TOKEN to ${paths.envFile}`);
-  }
-  if (user.tavilyApiKey) {
-    ok(`tavily:    API key saved to ${paths.envFile} (web_search / web_fetch)`);
-  } else {
-    warn(`tavily:    not configured — add TAVILY_API_KEY to ${paths.envFile} for web search`);
   }
 
   // ── 3. Pi CLI ───────────────────────────────────────────────────────────
@@ -805,7 +762,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   ok(`pi agent dir: ${agentDir}`);
 
   // ── 4. Pi extensions ────────────────────────────────────────────────────
-  step(4, total, "Install Pi extensions (pi-supergrok, pi-agent-browser-native, …)");
+  step(4, total, "Install Pi extensions (pi-web-search, pi-agent-browser-native, …)");
   const wanted = [...new Set([...(opts.packages ?? DEFAULT_PI_PACKAGES)])];
   let packagesInstalled: string[] = [];
   if (opts.skipPi) {
@@ -819,19 +776,15 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     }
   }
 
-  const ext = resolveSupergrokExtension();
-  if (ext) ok(`pi-supergrok extension: ${ext}`);
-  else warn("pi-supergrok extension not resolved — login may fail until it is installed");
-
-  const tavilyExt = resolveTavilyExtension();
-  if (tavilyExt) ok(`tavily extension: ${tavilyExt}`);
-  else warn("tavily extension not resolved — npm i @tavily/pi-extension");
+  const webSearchExt = resolveWebSearchExtension();
+  if (webSearchExt) ok(`pi-web-search extension: ${webSearchExt}`);
+  else warn("pi-web-search extension not resolved — npm i pi-web-search");
 
   if (packageListed(packagesInstalled, "npm:pi-agent-browser-native")) {
     ok("pi-agent-browser-native registered");
   }
-  if (packageListed(packagesInstalled, "npm:@tavily/pi-extension")) {
-    ok("@tavily/pi-extension registered");
+  if (packageListed(packagesInstalled, "npm:pi-web-search")) {
+    ok("pi-web-search registered");
   }
 
   // ── 5. agent-browser CLI + Chrome ───────────────────────────────────────
@@ -865,7 +818,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   }
 
   // ── 6. Auth ─────────────────────────────────────────────────────────────
-  step(6, total, "Authenticate (SuperGrok OAuth / OpenCode Go API key)");
+  step(6, total, "Authenticate (OpenCode Go API key)");
   let authAttempted = false;
   let authOk = false;
   let authDetail = "";
@@ -903,30 +856,25 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
         (await confirm("Add OpenCode Go subscription (API key) too?", false)));
     if (wantOpenCode) await loginOpenCodeGo(false);
   } else {
-    // Pick provider: supergrok (OAuth) | opencode-go (API key) | none
-    let provider: "supergrok" | "opencode-go" | null = null;
+    // Pick provider: opencode-go (API key) | none
+    let provider: "opencode-go" | null = null;
     if (opts.loginProvider) {
       provider = opts.loginProvider;
     } else if (opts.login || opts.forceLogin) {
-      provider = "supergrok"; // --login / --force-login default to SuperGrok
+      provider = "opencode-go"; // --login / --force-login default to OpenCode Go
     } else if (!opts.yes) {
       console.log("");
       console.log(chalk.dim("  Auth options:"));
-      console.log(chalk.dim("    supergrok   — SuperGrok / X Premium OAuth (pi-supergrok)"));
       console.log(chalk.dim("    opencode-go — OpenCode Go subscription (API key, opencode.ai)"));
       const choice = (
-        await ask("Authenticate with (supergrok/opencode-go, blank to skip)", {
-          defaultValue: "supergrok",
+        await ask("Authenticate with (opencode-go, blank to skip)", {
+          defaultValue: "opencode-go",
         })
       )
         .trim()
         .toLowerCase();
       provider =
-        choice === "opencode" || choice === "opencode-go" || choice === "og"
-          ? "opencode-go"
-          : choice === "supergrok" || choice === "sg" || choice === "s"
-            ? "supergrok"
-            : null;
+        choice === "opencode" || choice === "opencode-go" || choice === "og" ? "opencode-go" : null;
     }
 
     const shouldLogin =
@@ -934,38 +882,24 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       opts.forceLogin === true ||
       (provider !== null &&
         !opts.yes &&
-        (await confirm(
-          provider === "supergrok"
-            ? "Log in with SuperGrok / X Premium now?"
-            : "Configure OpenCode Go API key now?",
-          true,
-        )));
+        (await confirm("Configure OpenCode Go API key now?", true)));
 
     if (provider && shouldLogin) {
-      authAttempted = true;
-      if (provider === "supergrok") {
-        const result = await loginProvider("supergrok", { force: opts.forceLogin });
-        authOk = result.ok;
-        authDetail = result.ok ? "logged in as supergrok" : result.error;
-        if (result.ok) ok(authDetail);
-        else {
-          fail(authDetail);
-          console.log(chalk.dim("    You can retry later: disk-agent login"));
-          console.log(chalk.dim(`    Or set XAI_API_KEY in ${paths.envFile}`));
-        }
-      } else {
-        await loginOpenCodeGo(Boolean(opts.forceLogin));
-      }
+      await loginOpenCodeGo(Boolean(opts.forceLogin));
     } else if (!provider) {
       authDetail = "deferred — run disk-agent login when ready";
       warn(authDetail);
-      if (process.env.XAI_API_KEY || readEnvValue(paths.envFile, "XAI_API_KEY")) {
-        authOk = true;
-        ok("XAI_API_KEY present");
-      }
       if (process.env.OPENCODE_API_KEY || readEnvValue(paths.envFile, "OPENCODE_API_KEY")) {
         authOk = true;
         ok("OPENCODE_API_KEY present (opencode / opencode-go)");
+      }
+      if (process.env.ANTHROPIC_API_KEY || readEnvValue(paths.envFile, "ANTHROPIC_API_KEY")) {
+        authOk = true;
+        ok("ANTHROPIC_API_KEY present");
+      }
+      if (process.env.OPENAI_API_KEY || readEnvValue(paths.envFile, "OPENAI_API_KEY")) {
+        authOk = true;
+        ok("OPENAI_API_KEY present");
       }
     } else {
       authDetail = "deferred — run disk-agent login when ready";
@@ -979,9 +913,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     cfg.telegram.botToken ||
       process.env.TELEGRAM_BOT_TOKEN ||
       readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN"),
-  );
-  const tavilyConfigured = Boolean(
-    process.env.TAVILY_API_KEY?.trim() || readEnvValue(paths.envFile, "TAVILY_API_KEY"),
   );
 
   console.log("");
@@ -998,9 +929,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   console.log(
     `  telegram:  ${telegramConfigured ? chalk.green("configured") : chalk.yellow("not set")}`,
   );
-  console.log(
-    `  tavily:    ${tavilyConfigured ? chalk.green("configured") : chalk.yellow("not set (web search disabled)")}`,
-  );
   console.log(`  auth:      ${authOk ? chalk.green("ok") : chalk.yellow(authDetail || "needed")}`);
   console.log(`  auth file: ${piAuthPath(agentDir)}`);
   console.log("");
@@ -1009,11 +937,8 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   if (!telegramConfigured) {
     console.log(`  ${stepN++}. Add TELEGRAM_BOT_TOKEN to ${paths.envFile}`);
   }
-  if (!tavilyConfigured) {
-    console.log(`  ${stepN++}. Add TAVILY_API_KEY to ${paths.envFile} for web search`);
-  }
   if (telegramConfigured) {
-    console.log(`  ${stepN++}. disk-agent models          # verify SuperGrok models`);
+    console.log(`  ${stepN++}. disk-agent models          # verify available models`);
     console.log(`  ${stepN++}. disk-agent gateway         # start Telegram + cron`);
     console.log(`  ${stepN++}. DM the bot → disk-agent pair <CODE>`);
   } else {
@@ -1021,9 +946,6 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     console.log(`  ${stepN++}. DM the bot → disk-agent pair <CODE>`);
   }
   if (!authOk) {
-    console.log(
-      `  ${stepN++}. disk-agent login                              # SuperGrok / X Premium OAuth`,
-    );
     console.log(
       `  ${stepN++}. disk-agent login opencode-go --type api_key   # OpenCode Go subscription`,
     );
@@ -1047,8 +969,7 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
     },
     browser: browserResult,
     telegram: { configured: telegramConfigured },
-    tavily: { configured: tavilyConfigured },
-    supergrokExtension: ext,
+    webSearchExtension: webSearchExt,
     auth: { attempted: authAttempted, ok: authOk, detail: authDetail },
     version,
   };
@@ -1105,20 +1026,22 @@ export async function runDoctor(opts?: {
   const agentDir = resolvePiAgentDir();
   const settings = readPiSettings(agentDir);
 
-  const hasSg = packageListed(settings.packages, "npm:pi-supergrok");
+  const hasWebSearchPkg = packageListed(settings.packages, "npm:pi-web-search");
   checks.push({
-    name: "pi-supergrok package",
-    ok: hasSg || Boolean(resolveSupergrokExtension()),
-    detail: hasSg
+    name: "pi-web-search package",
+    ok: hasWebSearchPkg || Boolean(resolveWebSearchExtension()),
+    detail: hasWebSearchPkg
       ? "listed in ~/.pi/agent/settings.json"
-      : (resolveSupergrokExtension() ?? "not installed"),
+      : (resolveWebSearchExtension() ?? "not installed"),
+    soft: true,
   });
 
-  const ext = resolveSupergrokExtension();
+  const webSearchExt = resolveWebSearchExtension();
   checks.push({
-    name: "pi-supergrok extension file",
-    ok: Boolean(ext),
-    detail: ext ?? "missing",
+    name: "pi-web-search extension file",
+    ok: Boolean(webSearchExt),
+    detail: webSearchExt ?? "missing — npm i pi-web-search",
+    soft: true,
   });
 
   const hasBrowserPkg = packageListed(settings.packages, "npm:pi-agent-browser-native");
@@ -1126,30 +1049,6 @@ export async function runDoctor(opts?: {
     name: "pi-agent-browser-native",
     ok: hasBrowserPkg,
     detail: hasBrowserPkg ? "listed in pi settings" : "not installed — disk-agent setup",
-    soft: true,
-  });
-
-  const tavilyExt = resolveTavilyExtension();
-  const hasTavilyPkg = packageListed(settings.packages, "npm:@tavily/pi-extension");
-  checks.push({
-    name: "@tavily/pi-extension",
-    ok: Boolean(tavilyExt) || hasTavilyPkg,
-    detail: tavilyExt
-      ? tavilyExt
-      : hasTavilyPkg
-        ? "listed in pi settings"
-        : "not installed — npm i @tavily/pi-extension",
-    soft: true,
-  });
-  checks.push({
-    name: "TAVILY_API_KEY",
-    ok: Boolean(
-      process.env.TAVILY_API_KEY?.trim() || readEnvValue(paths.envFile, "TAVILY_API_KEY"),
-    ),
-    detail:
-      process.env.TAVILY_API_KEY?.trim() || readEnvValue(paths.envFile, "TAVILY_API_KEY")
-        ? "set"
-        : `missing — add TAVILY_API_KEY to ${paths.envFile}`,
     soft: true,
   });
 
@@ -1179,7 +1078,7 @@ export async function runDoctor(opts?: {
     authOk = await hasAnyAuth();
     authDetail = authOk
       ? "credentials found"
-      : "no auth — disk-agent login, OPENCODE_API_KEY, or XAI_API_KEY";
+      : "no auth — disk-agent login opencode-go or provider API keys";
   } catch (err) {
     authDetail = err instanceof Error ? err.message : String(err);
   }

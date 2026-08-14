@@ -14,8 +14,8 @@ export const ConfigSchema = z.object({
 
   model: z
     .object({
-      /** Provider id — prefer "supergrok" (pi-supergrok OAuth) or "xai" (API key / built-in OAuth) */
-      provider: z.string().default("supergrok"),
+      /** Provider id — e.g. "opencode-go" (built-in subscription) or any pi provider */
+      provider: z.string().default("opencode-go"),
       id: z.string().default("grok-4.5"),
       thinking: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).default("medium"),
     })
@@ -193,7 +193,7 @@ export function loadConfig(opts?: {
         parsed.model.id = rest.join("/");
       }
     } else if (raw) {
-      // bare id → keep configured provider (default supergrok)
+      // bare id → keep configured provider (default opencode-go)
       parsed.model.id = raw;
     }
   }
@@ -374,39 +374,31 @@ export function writeEnvExample(dataDir: string): void {
 TELEGRAM_BOT_TOKEN=
 DISK_AGENT_OWNER_ID=
 
-# Preferred: SuperGrok / X subscription OAuth
-#   disk-agent setup          # installs pi + pi-supergrok + login
-#   disk-agent login          # re-auth SuperGrok
-# Tokens live in ~/.pi/agent/auth.json (shared with the pi CLI)
-#
-# Or use an xAI API key:
-# XAI_API_KEY=
-
-# OpenCode Go / OpenCode Zen subscription (usage-based credits, opencode.ai):
+# Preferred: OpenCode Go / OpenCode Zen subscription (usage-based credits, opencode.ai)
 #   disk-agent login opencode-go --type api_key   # stores key in ~/.pi/agent/auth.json
 #   or set:
 # OPENCODE_API_KEY=oc_...
 
-# Other providers (optional):
+# Other providers (optional API keys):
 # ANTHROPIC_API_KEY=
 # OPENAI_API_KEY=
+# GEMINI_API_KEY=
 
-# Tavily web search / extract (web_search + web_fetch via @tavily/pi-extension):
-# TAVILY_API_KEY=tvly-...
+# Web search (web_search + url_context via pi-web-search):
+#   Provider-native — uses your current model's provider (Gemini/OpenAI/Anthropic),
+#   no API key needed. Install: pi install npm:pi-web-search  (or disk-agent setup)
 
 # Voice / audio STT (Telegram voice notes → Whisper transcript):
 # OPENAI_API_KEY=sk-...          # provider: openai | auto
 # GROQ_API_KEY=gsk_...           # provider: groq | auto (free-tier Whisper)
 
 # Model selection (provider/id):
-# DISK_AGENT_MODEL=supergrok/grok-4.5
-# DISK_AGENT_MODEL=supergrok/grok-4.3
-# DISK_AGENT_MODEL=supergrok/grok-composer-2.5-fast
-# DISK_AGENT_MODEL=xai/grok-4
-# DISK_AGENT_MODEL=opencode-go/kimi-k2.6
 # DISK_AGENT_MODEL=opencode-go/grok-4.5
+# DISK_AGENT_MODEL=opencode-go/kimi-k2.6
 # DISK_AGENT_MODEL=opencode/claude-sonnet-4-5
-# DISK_AGENT_PROVIDER=supergrok
+# DISK_AGENT_MODEL=anthropic/claude-sonnet-4-20250514
+# DISK_AGENT_MODEL=openai/gpt-5.4
+# DISK_AGENT_PROVIDER=opencode-go
 
 # Paths (defaults shown):
 # DISK_AGENT_HOME=~/.disk-agent

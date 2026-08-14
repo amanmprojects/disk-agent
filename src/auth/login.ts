@@ -7,9 +7,9 @@ import { platform } from "node:os";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
-import { bootstrapSupergrok, getSharedModelRuntime } from "../agent/pi.js";
+import { getSharedModelRuntime } from "../agent/pi.js";
 
-export type LoginProvider = "supergrok" | "xai" | string;
+export type LoginProvider = string;
 
 /** Minimal auth interaction shape compatible with Pi ModelRuntime.login. */
 interface CliAuthPrompt {
@@ -108,21 +108,10 @@ function createCliInteraction(rl: ReturnType<typeof createInterface>) {
  * Run OAuth (or API-key) login for a provider. Tokens land in ~/.pi/agent/auth.json.
  */
 export async function loginProvider(
-  provider: LoginProvider = "supergrok",
-  opts?: { type?: "oauth" | "api_key"; skipBootstrap?: boolean; force?: boolean },
+  provider: LoginProvider = "opencode-go",
+  opts?: { type?: "oauth" | "api_key"; force?: boolean },
 ): Promise<{ ok: true; provider: string } | { ok: false; error: string }> {
   const type = opts?.type ?? "oauth";
-
-  if (!opts?.skipBootstrap) {
-    try {
-      await bootstrapSupergrok();
-    } catch (err) {
-      return {
-        ok: false,
-        error: `Failed to load providers: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
-  }
 
   const rt = await getSharedModelRuntime();
 
@@ -136,11 +125,9 @@ export async function loginProvider(
       ok: false,
       error: [
         `Provider "${provider}" is not registered.`,
-        provider === "supergrok"
-          ? "Install pi-supergrok: disk-agent setup  (or pi install npm:pi-supergrok)"
-          : provider === "opencode-go" || provider === "opencode"
-            ? "OpenCode Go/Zen is built into pi — set OPENCODE_API_KEY or run: disk-agent login opencode-go --type api_key"
-            : `Available: ${rt.getRegisteredProviderIds().join(", ") || "(none)"}`,
+        provider === "opencode-go" || provider === "opencode"
+          ? "OpenCode Go/Zen is built into pi — set OPENCODE_API_KEY or run: disk-agent login opencode-go --type api_key"
+          : `Available: ${rt.getRegisteredProviderIds().join(", ") || "(none)"}`,
       ].join("\n"),
     };
   }
@@ -167,12 +154,11 @@ export async function loginProvider(
 /** True if any useful provider has auth configured. */
 export async function hasAnyAuth(): Promise<boolean> {
   try {
-    await bootstrapSupergrok();
     const rt = await getSharedModelRuntime();
     for (const id of rt.getRegisteredProviderIds()) {
       if (rt.hasConfiguredAuth(id)) return true;
     }
-    if (process.env.XAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
+    if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
       return true;
     }
     return false;
@@ -185,7 +171,6 @@ export async function authStatus(): Promise<{
   providers: Array<{ id: string; auth: boolean }>;
   any: boolean;
 }> {
-  await bootstrapSupergrok();
   const rt = await getSharedModelRuntime();
   const providers = rt.getRegisteredProviderIds().map((id) => ({
     id,
@@ -193,6 +178,6 @@ export async function authStatus(): Promise<{
   }));
   return {
     providers,
-    any: providers.some((p) => p.auth) || Boolean(process.env.XAI_API_KEY),
+    any: providers.some((p) => p.auth) || Boolean(process.env.OPENAI_API_KEY),
   };
 }

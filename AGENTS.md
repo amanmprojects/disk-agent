@@ -7,8 +7,8 @@ Short map for coding agents. Prefer this over skimming the whole repo.
 **Personal AI agent gateway** (OpenClaw/Hermes-style) on the **Pi coding-agent SDK**.
 
 - **Channels:** Telegram (grammY) + local `disk-agent chat` REPL; voice notes → Whisper STT
-- **Runtime:** agentic loop with coding tools + memory, cron, browser, skills, Tavily search
-- **Auth:** SuperGrok / xAI (shared with Pi), not under `~/.disk-agent`
+- **Runtime:** agentic loop with coding tools + memory, cron, browser, skills, provider-native web search (pi-web-search)
+- **Auth:** OpenCode Go / provider API keys (shared with Pi), not under `~/.disk-agent`
 
 Package: `@amanm/disk-agent` · Node ≥ 20.6 · ESM TypeScript (`src/` → `dist/`)
 
@@ -33,7 +33,7 @@ expects). Don't cross them. Formatting is enforced by **Biome** (`biome.json`) �
 Telegram / CLI  →  Gateway  →  AgentRuntime (Pi session)
                       │              │
                       ├ memory       ├ custom tools (tools.ts)
-                      ├ cron         ├ Pi extensions (supergrok, tavily)
+                      ├ cron         ├ Pi extensions (web search, browser-native)
                       ├ browser      └ system prompt (runtime.ts)
                       └ sessions
 ```
@@ -44,7 +44,7 @@ Telegram / CLI  →  Gateway  →  AgentRuntime (Pi session)
 | Gateway orchestration | `src/gateway.ts` |
 | Pi session + system prompt | `src/agent/runtime.ts` |
 | Custom tools + **tool allowlist** | `src/agent/tools.ts` |
-| SuperGrok / Tavily extension paths | `src/agent/pi.ts` |
+| Pi extension paths (`pi-web-search`, …) | `src/agent/pi.ts` |
 | Setup / doctor | `src/setup.ts` + `src/setup/` (`tui.ts` OpenTUI wizard, `pi-import.ts` Pi model/provider import) |
 | Config + dotenv | `src/config.ts` |
 | Path layout | `src/paths.ts` |
@@ -57,7 +57,7 @@ Telegram / CLI  →  Gateway  →  AgentRuntime (Pi session)
 | Path | Purpose |
 |------|---------|
 | `~/.disk-agent/` | Home: config, `.env`, workspace, sessions, logs |
-| `~/.disk-agent/.env` | Secrets (`TELEGRAM_BOT_TOKEN`, `TAVILY_API_KEY`, `OPENAI_API_KEY` / `GROQ_API_KEY` for voice STT, …) |
+| `~/.disk-agent/.env` | Secrets (`TELEGRAM_BOT_TOKEN`, `OPENCODE_API_KEY`, `OPENAI_API_KEY` / `GROQ_API_KEY` for voice STT, …) |
 | `~/.disk-agent/workspace/` | Identity (`SOUL.md`, `USER.md`, `MEMORY.md`, skills) |
 | `~/.pi/agent/auth.json` | LLM auth (shared with `pi` CLI) |
 
@@ -68,8 +68,7 @@ Home resolve order: `DISK_AGENT_HOME` → `$XDG_DATA_HOME/disk-agent` → `~/.di
 1. **`createAgentSession({ tools })` is an allowlist.** New tools (custom *or* from Pi extensions) must be added to `ALL_AGENT_TOOL_NAMES` in `tools.ts` or the model never sees them.
 
 2. **Pi extensions** load via `additionalExtensionPaths` from `resolveAgentExtensionPaths()`:
-   - `pi-supergrok` → SuperGrok provider
-   - `@tavily/pi-extension` → `web_search`, `web_fetch` (needs `TAVILY_API_KEY`)
+   - `pi-web-search` → `web_search`, `url_context` (provider-native — no API key needed)
 
 3. **Detached gateway does not read fish/shell config.** Put secrets in `~/.disk-agent/.env` (loaded by `loadConfig` / dotenv). Restart gateway after env changes: `disk-agent gateway restart`.
 
@@ -77,7 +76,7 @@ Home resolve order: `DISK_AGENT_HOME` → `$XDG_DATA_HOME/disk-agent` → `~/.di
 
 5. **Coding cwd vs workspace:** `cfg.cwd` is for read/bash/edit; `cfg.workspaceDir` is identity/memory. Don’t conflate them.
 
-6. **Default Pi packages** for setup: `DEFAULT_PI_PACKAGES` in `setup.ts` (`pi-supergrok`, `pi-agent-browser-native`, `@tavily/pi-extension`).
+6. **Default Pi packages** for setup: `DEFAULT_PI_PACKAGES` in `setup.ts` (`pi-web-search`, `pi-agent-browser-native`).
 
 7. **ESM + `NodeNext`:** relative imports MUST carry the `.js` extension even though the source is `.ts` (`from "./utils.js"`). Omitting it type-checks in some editors and fails at runtime.
 

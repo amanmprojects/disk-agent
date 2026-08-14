@@ -17,14 +17,13 @@ import { makeSessionKey, type SessionRegistry } from "../session/manager.js";
 import type { SkillsStore } from "../skills/store.js";
 import type { AgentRunResult, ChannelId, IncomingMessage, LiveProgressEvent } from "../types.js";
 import {
-  bootstrapSupergrok,
   getSharedModelRuntime,
   piAgentDir,
   resolveAgentExtensionPaths,
   resolveModel,
-  resolveTavilyExtension,
+  resolveWebSearchExtension,
 } from "./pi.js";
-import { ALL_AGENT_TOOL_NAMES, createDiskTools } from "./tools.js";
+import { ALL_AGENT_TOOL_NAMES, createDiskTools, WEB_SEARCH_TOOL_NAMES } from "./tools.js";
 
 export interface RuntimeDeps {
   cfg: AppConfig;
@@ -52,7 +51,7 @@ const SESSION_CACHE_MAX = 32;
 
 /**
  * Wraps the Pi coding-agent SDK with OpenClaw/Hermes-style context assembly,
- * SuperGrok / xAI subscription support via pi-supergrok, and disk-agent tools.
+ * provider-native web search via pi-web-search, and disk-agent tools.
  */
 export class AgentRuntime {
   private deps: RuntimeDeps;
@@ -71,30 +70,20 @@ export class AgentRuntime {
 
   private async init(): Promise<void> {
     try {
-      const info = await bootstrapSupergrok(this.log);
-      this.log.info("pi providers ready", {
-        supergrok: info.loaded,
-        extension: info.extensionPath,
-        providers: info.providers,
+      const webSearch = resolveWebSearchExtension();
+      this.log.info("web search extension", {
+        loaded: Boolean(webSearch),
+        path: webSearch,
+        tools: WEB_SEARCH_TOOL_NAMES,
       });
-      const tavily = resolveTavilyExtension();
-      this.log.info("tavily extension", {
-        loaded: Boolean(tavily),
-        path: tavily,
-        apiKey: Boolean(process.env.TAVILY_API_KEY?.trim()),
-      });
-      if (!tavily) {
+      if (!webSearch) {
         this.log.warn(
-          "Tavily extension not found — install: npm i @tavily/pi-extension (or pi install npm:@tavily/pi-extension)",
-        );
-      } else if (!process.env.TAVILY_API_KEY?.trim()) {
-        this.log.warn(
-          "TAVILY_API_KEY not set — web_search / web_fetch will fail until it is in ~/.disk-agent/.env or the process env",
+          "pi-web-search not found — install: npm i pi-web-search (or pi install npm:pi-web-search)",
         );
       }
       await getSharedModelRuntime(this.log);
     } catch (err) {
-      this.log.error("failed to bootstrap pi/supergrok", {
+      this.log.error("failed to bootstrap pi runtime", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -650,7 +639,7 @@ export class AgentRuntime {
     const rt = await getSharedModelRuntime(this.log);
     const out: Array<{ provider: string; id: string; auth: boolean }> = [];
     for (const m of rt.getModels()) {
-      if (m.provider === "supergrok" || m.provider === "xai" || rt.hasConfiguredAuth(m.provider)) {
+      if (rt.hasConfiguredAuth(m.provider)) {
         out.push({
           provider: m.provider,
           id: m.id,
@@ -658,11 +647,7 @@ export class AgentRuntime {
         });
       }
     }
-    return out.sort((a, b) => {
-      if (a.provider === "supergrok" && b.provider !== "supergrok") return -1;
-      if (b.provider === "supergrok" && a.provider !== "supergrok") return 1;
-      return `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`);
-    });
+    return out.sort((a, b) => `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`));
   }
 
   private async getOrCreateSession(
@@ -798,7 +783,7 @@ export class AgentRuntime {
         this.log.info("activated tools", {
           count: ALL_AGENT_TOOL_NAMES.length,
           browser: ALL_AGENT_TOOL_NAMES.filter((n) => n.startsWith("browser_")),
-          tavily: ALL_AGENT_TOOL_NAMES.filter((n) => n === "web_search" || n === "web_fetch"),
+          web: [...WEB_SEARCH_TOOL_NAMES],
           extensions: extensionPaths,
         });
       } else {
@@ -1040,9 +1025,9 @@ function buildSystemPrompt(opts: {
 You have coding tools (read, bash, edit, write, grep, find, ls) plus:
 - memory_save / memory_search / memory_log / memory_delete — persistent memory
 - cron_list / cron_add / cron_remove / cron_run — scheduled automations
-- **web_search** — Tavily web search (recent info, facts, source discovery). Prefer this for open-ended research.
-- **web_fetch** — Tavily extract from one or more URLs (markdown/text). Use after web_search or when the user gives URLs.
-- web_get — plain HTTP fetch + HTML→text (no JS). Fallback for simple static pages when Tavily is unnecessary.
+- **web_search** — provider-native web search (pi-web-search): uses your current model's provider API (Google Gemini, OpenAI, or Anthropic) — no API key needed. Prefer this for open-ended research.
+- **url_context** — Gemini-only: analyze up to 20 public URLs (web pages, documents, images, YouTube) with Gemini's native URL Context. Use when the user gives URLs to analyze.
+- web_get — plain HTTP fetch + HTML→text (no JS). Fallback for simple static pages.
 - browser_open / browser_snapshot / browser_click / browser_fill / browser_screenshot / browser_eval / browser_close — **real browser automation** via agent-browser
 - session_list / session_reset / session_resume — conversation session management (list, reset/archive, resume previous)
 - skill_list / skill_load / skill_create / skill_delete / skill_find / skill_install — **skills system**
@@ -1061,11 +1046,11 @@ Do not claim you cannot create or install skills — tools are registered.
 ${opts.skillCatalog}
 
 ## Web research (important)
-- For open-ended questions, news, or "search the web": use **web_search** (Tavily).
-- After search, use **web_fetch** on promising URLs when you need page content.
+- For open-ended questions, news, or "search the web": use **web_search** (provider-native — no extra API key needed).
+- To analyze specific URLs (Gemini models): use **url_context**. On other providers, fetch pages with web_get or browser_open.
 - Split multi-topic research into multiple focused web_search calls.
-- Do **not** claim you lack web search / Tavily — web_search and web_fetch are registered (need TAVILY_API_KEY in the process env).
-- Prefer web_search → web_fetch over browser_* for research. Use browser_* only for interactive sites (login, clicks, forms).
+- Do **not** claim you lack web search — web_search is registered via the pi-web-search extension (uses the current model's provider).
+- Prefer web_search over browser_* for research. Use browser_* only for interactive sites (login, clicks, forms).
 
 ## Browser usage (important)
 When the user asks to "use the browser", interact with a site, click, fill forms, log in, or handle JS-rendered pages:
@@ -1075,7 +1060,7 @@ When the user asks to "use the browser", interact with a site, click, fill forms
 4. browser_screenshot if visual confirmation helps
 5. browser_close when done
 Do **not** claim browser tools are unavailable — they are registered in this runtime.
-Prefer browser_* over web_get for interactive tasks. Use web_get only for quick static fetches when Tavily is not needed.
+Prefer browser_* over web_get for interactive tasks. Use web_get only for quick static fetches when web_search is not needed.
 
 ## Reply format (Telegram-first)
 Most replies land on Telegram. Keep formatting **minimal** and phone-scannable. A small markdown subset is converted to Telegram HTML; everything else shows as plain text.

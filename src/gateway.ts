@@ -550,7 +550,7 @@ export class Gateway {
 
       case "model": {
         if (!arg) {
-          return `Current model: ${this.cfg.model.provider}/${this.cfg.model.id}\nUsage: /model supergrok/grok-4.5\nOr: /models`;
+          return `Current model: ${this.cfg.model.provider}/${this.cfg.model.id}\nUsage: /model opencode-go/grok-4.5\nOr: /models`;
         }
         if (arg.includes("/")) {
           const [provider, ...idParts] = arg.split("/");
@@ -644,7 +644,7 @@ export class Gateway {
         const browser = ALL_AGENT_TOOL_NAMES.filter(
           (t) => t.startsWith("browser_") || t === "web_get",
         );
-        const tavily = ALL_AGENT_TOOL_NAMES.filter((t) => t === "web_search" || t === "web_fetch");
+        const web = ALL_AGENT_TOOL_NAMES.filter((t) => t === "web_search" || t === "url_context");
         const memory = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("memory_"));
         const cron = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("cron_"));
         const skill = ALL_AGENT_TOOL_NAMES.filter((t) => t.startsWith("skill_"));
@@ -652,12 +652,11 @@ export class Gateway {
           (t) =>
             !t.includes("_") || ["read", "bash", "edit", "write", "grep", "find", "ls"].includes(t),
         );
-        const tavilyKey = Boolean(process.env.TAVILY_API_KEY?.trim());
         return [
           `Agent tools (${ALL_AGENT_TOOL_NAMES.length}):`,
           `coding: ${builtin.join(", ")}`,
           `browser: ${browser.join(", ")}`,
-          `tavily: ${tavily.join(", ")}${tavilyKey ? "" : " (TAVILY_API_KEY missing)"}`,
+          `web: ${web.join(", ")}`,
           `memory: ${memory.join(", ")}`,
           `cron: ${cron.join(", ")}`,
           `skills: ${skill.join(", ")}`,

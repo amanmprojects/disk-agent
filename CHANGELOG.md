@@ -1,10 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Web search / providers
+
+- **SuperGrok, xAI, and Tavily removed entirely.** Dependencies `pi-supergrok` and `@tavily/pi-extension` are gone, along with every reference in code, setup, docs, and tests.
+- Web search now comes from **[`pi-web-search`](https://pi.dev/packages/pi-web-search)** (new dependency, installed by setup as `npm:pi-web-search`): provider-native `web_search` (uses your current model's provider — Google Gemini, OpenAI, or Anthropic, no API key needed) plus Gemini-only `url_context` for analyzing up to 20 URLs. `web_fetch` no longer exists; the tool allowlist, `/tools`, help text, and the agent system prompt were updated accordingly.
+- Default model is now `opencode-go/grok-4.5` (was `supergrok/grok-4.5`); model fallback chain drops SuperGrok/xAI and now covers opencode-go → opencode → openai-codex → openai → anthropic → google.
+- Auth flow simplified: setup and `disk-agent login` now default to **OpenCode Go** (`--type api_key`); `disk-agent login` default type changed from `oauth` to `api_key`. `--login-provider` only accepts `opencode-go`. The OpenTUI wizard's auth screen offers opencode-go or skip (no OAuth provider choice).
+- `disk-agent doctor` checks `pi-web-search` (package + extension file) instead of `pi-supergrok` / `@tavily/pi-extension` / `TAVILY_API_KEY`; setup summary and `.env.example` no longer mention Tavily or `XAI_API_KEY`.
+- CLI/docs: `disk-agent setup` flags `--tavily-key` removed; `--model`, `/model`, `/models`, and README examples updated to opencode-go / anthropic / openai ids.
+
 ## 2.2.0
 
 ### Setup — OpenTUI wizard
 
-- `disk-agent setup` now opens an **OpenTUI wizard** (raw `@opentui/core` constructs, new dependency) instead of text prompts when the runtime supports it: welcome → agent basics → model/provider → Telegram → Tavily → components (pi, agent-browser, auth) → review & run. Enter/Tab navigate, Esc goes back (or cancels on the first screen).
+- `disk-agent setup` now opens an **OpenTUI wizard** (raw `@opentui/core` constructs, new dependency) instead of text prompts when the runtime supports it: welcome → agent basics → model/provider → Telegram → components (pi, agent-browser, auth) → review & run. Enter/Tab navigate, Esc goes back (or cancels on the first screen).
 - **Import models/providers from Pi** — the model screen lists candidates from `~/.pi/agent/auth.json` (providers with credentials), `models-store.json` (catalog), and `settings.json` (Pi's configured default first), each tagged with its source + auth state; manual entry stays available. The classic prompt flow also prefills the default model from Pi's `settings.json` when config is unset.
 - The auth screen shows existing credentials (`auth.json` providers + relevant env keys) before you pick a provider.
 - **Runtime gating:** the wizard auto-engages under Bun or Node ≥ 26.4 + `--experimental-ffi`; on older Node it re-execs the command under `bun` when available (falling back to classic prompts if bun fails), otherwise uses the classic readline flow. New `--no-tui` flag forces the classic prompts.
@@ -20,17 +31,17 @@
 
 ### Setup / auth
 
-- Setup now offers the **OpenCode Go** option even when SuperGrok credentials already exist — after "credentials already present" it asks "Add OpenCode Go subscription (API key) too?"
+- Setup now offers the **OpenCode Go** option even when other credentials already exist — after "credentials already present" it asks "Add OpenCode Go subscription (API key) too?"
 - `disk-agent setup --login-provider opencode-go` works when already authenticated (previously the flag was ignored and the provider choice was skipped)
 
 ## 2.1.0
 
 ### Auth / models
 
-- **OpenCode Go subscription support** — the setup wizard now offers SuperGrok (OAuth) or OpenCode Go (API key) at the auth step, and `disk-agent login opencode-go --type api_key` stores the key in `~/.pi/agent/auth.json`
+- **OpenCode Go subscription support** — the setup wizard offers OpenCode Go (API key) at the auth step, and `disk-agent login opencode-go --type api_key` stores the key in `~/.pi/agent/auth.json`
   - `OPENCODE_API_KEY` is applied to both `opencode` (Zen) and `opencode-go` providers in the shared ModelRuntime
-  - Model fallback chain now includes OpenCode Go / Zen (`kimi-k2.6`, `grok-4.5`, `claude-sonnet-4-5`, …) after SuperGrok and before xAI
-  - New `--login-provider <supergrok|opencode-go>` flag for non-interactive `disk-agent setup`
+  - Model fallback chain includes OpenCode Go / Zen (`kimi-k2.6`, `grok-4.5`, `claude-sonnet-4-5`, …)
+  - New `--login-provider opencode-go` flag for non-interactive `disk-agent setup`
   - `disk-agent doctor` checks `OPENCODE_API_KEY`; `status` shows an `opencode:` line; `.env.example` documents the key and model ids
 
 ### Telegram / delivery
@@ -68,9 +79,9 @@
   - Home layout + workspace/skills seed
   - Prompts for agent name, model, **Telegram bot token**, owner id, cwd
   - Installs **Pi** CLI if missing
-  - Installs Pi extensions: **pi-supergrok**, **pi-agent-browser-native**
+  - Installs Pi extensions: **pi-web-search**, **pi-agent-browser-native**
   - Installs **[agent-browser](https://agent-browser.dev/)** + Chrome (`agent-browser install`)
-  - SuperGrok / X Premium OAuth login
+  - OpenCode Go API-key login (or provider keys)
 
 ### Standardized home directory
 
@@ -89,7 +100,7 @@ Auth remains shared with Pi at `~/.pi/agent/auth.json`.
 ### New CLI commands
 
 - `disk-agent setup` — full first-run bootstrap
-- `disk-agent login [provider]` — SuperGrok / provider OAuth
+- `disk-agent login [provider]` — provider login (OpenCode Go API key, OAuth)
 - `disk-agent doctor` — install / paths / auth health check
 - `disk-agent paths` — print the standardized layout
 

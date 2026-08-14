@@ -12,7 +12,7 @@ function miniCfg(dataDir: string): AppConfig {
     workspaceDir: join(dataDir, "workspace"),
     cwd: dataDir,
     agentName: "test",
-    model: { provider: "supergrok", id: "grok-4.5", thinking: "medium" },
+    model: { provider: "opencode-go", id: "grok-4.5", thinking: "medium" },
     telegram: { enabled: false, dmPolicy: "pairing", allowFrom: [] },
     logging: { level: "error" },
   } as AppConfig;

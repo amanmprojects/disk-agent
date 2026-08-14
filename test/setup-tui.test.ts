@@ -39,11 +39,11 @@ test("readPiAuthProviders: provider keys from auth.json", () => {
       "auth.json",
       JSON.stringify({
         "opencode-go": { type: "api_key", key: "oc_secret" },
-        supergrok: { type: "oauth", token: "…" },
+        anthropic: { type: "oauth", token: "…" },
       }),
     );
     const got = readPiAuthProviders(join(dir, "auth.json"));
-    assert.deepEqual([...got].sort(), ["opencode-go", "supergrok"]);
+    assert.deepEqual([...got].sort(), ["anthropic", "opencode-go"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -173,7 +173,7 @@ test("wizard: full walkthrough collects values", { skip: !IS_BUN }, async () => 
       version: "9.9.9-test",
       existing: {
         agentName: "Disk",
-        model: "supergrok/grok-4.5",
+        model: "opencode-go/grok-4.5",
         cwd: "/home/test",
       },
       piInfo: {
@@ -186,9 +186,9 @@ test("wizard: full walkthrough collects values", { skip: !IS_BUN }, async () => 
             authed: true,
           },
           {
-            provider: "supergrok",
-            id: "grok-4.5",
-            label: "supergrok/grok-4.5",
+            provider: "anthropic",
+            id: "claude-sonnet-4-20250514",
+            label: "anthropic/claude-sonnet-4-20250514",
             source: "preset" as const,
             authed: false,
           },
@@ -196,7 +196,7 @@ test("wizard: full walkthrough collects values", { skip: !IS_BUN }, async () => 
         defaultProvider: "opencode-go",
         defaultModel: "deepseek-v4-flash",
       },
-      auth: { providers: ["opencode-go"], envKeys: ["XAI_API_KEY"] },
+      auth: { providers: ["opencode-go"], envKeys: ["OPENCODE_API_KEY"] },
     };
 
     const wizard = new Wizard(setup.renderer, ctx);
@@ -232,10 +232,6 @@ test("wizard: full walkthrough collects values", { skip: !IS_BUN }, async () => 
     setup.mockInput.pressKey("RETURN");
     await setup.renderOnce();
 
-    // Tavily: Enter (skip)
-    setup.mockInput.pressKey("RETURN");
-    await setup.renderOnce();
-
     // Pi components: yes (default) → Enter
     setup.mockInput.pressKey("RETURN");
     await setup.renderOnce();
@@ -246,8 +242,8 @@ test("wizard: full walkthrough collects values", { skip: !IS_BUN }, async () => 
     // Auth status line rendered from ctx.auth.
     assert.match(setup.captureCharFrame(), /Already authenticated/);
     assert.match(setup.captureCharFrame(), /opencode-go/);
-    assert.match(setup.captureCharFrame(), /XAI_API_KEY/);
-    // Auth: supergrok (default) → Enter
+    assert.match(setup.captureCharFrame(), /OPENCODE_API_KEY/);
+    // Auth: opencode-go (default) → Enter
     setup.mockInput.pressKey("RETURN");
     await setup.renderOnce();
 
@@ -262,7 +258,7 @@ test("wizard: full walkthrough collects values", { skip: !IS_BUN }, async () => 
     assert.equal(values.skipPi, false);
     assert.equal(values.skipBrowser, false);
     assert.equal(values.skipLogin, false);
-    assert.equal(values.loginProvider, "supergrok");
+    assert.equal(values.loginProvider, "opencode-go");
     assert.equal(values.telegramToken, undefined);
   } finally {
     setup.renderer.destroy();
@@ -277,7 +273,7 @@ test("wizard: Esc on welcome cancels", { skip: !IS_BUN }, async () => {
   try {
     const wizard = new Wizard(setup.renderer, {
       version: "9.9.9-test",
-      existing: { agentName: "Disk", model: "supergrok/grok-4.5", cwd: "/tmp" },
+      existing: { agentName: "Disk", model: "opencode-go/grok-4.5", cwd: "/tmp" },
       piInfo: { candidates: [], defaultProvider: undefined, defaultModel: undefined },
     });
     let cancelled = false;

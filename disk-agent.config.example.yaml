@@ -7,15 +7,19 @@ agentName: Disk
 # cwd: /path/to/your/project
 
 model:
-  # SuperGrok / X subscription via pi-supergrok (shares ~/.pi/agent/auth.json)
-  provider: supergrok
+  # OpenCode Go / OpenCode Zen subscription (opencode.ai, shares ~/.pi/agent/auth.json)
+  # or any pi provider with a key (anthropic / openai / google, see .env.example)
+  provider: opencode-go
   id: grok-4.5
   # Alternatives:
-  # id: grok-4.3
-  # id: grok-composer-2.5-fast
-  # id: grok-4.20-0309-reasoning
-  # provider: xai
-  # id: grok-4
+  # id: kimi-k2.6
+  # id: deepseek-v4-flash
+  # provider: opencode
+  # id: claude-sonnet-4-5
+  # provider: anthropic
+  # id: claude-sonnet-4-20250514
+  # provider: openai
+  # id: gpt-5.4
   thinking: medium
 
 telegram:
