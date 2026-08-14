@@ -1,6 +1,6 @@
 {
   "name": "@amanm/disk-agent",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "OpenClaw/Hermes-style personal AI agent gateway powered by Pi — Telegram, memory, cron, SuperGrok",
   "type": "module",
   "main": "dist/index.js",
