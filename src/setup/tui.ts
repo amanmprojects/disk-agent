@@ -22,6 +22,12 @@ import {
   Text,
   type VChild,
 } from "@opentui/core";
+import {
+  createInstallRun,
+  type InstallRunController,
+  type StepResult,
+  stderrTail,
+} from "./install-steps.js";
 import { collectPiModels, type PiModelCandidate, type PiModelInfo } from "./pi-import.js";
 
 /** Values the wizard collected. Merged into SetupOptions by runSetup. */
@@ -43,6 +49,8 @@ export interface TuiOutcome {
   /** createCliRenderer failed (no native FFI) — caller should fall back. */
   rendererFailed?: boolean;
   values?: TuiValues;
+  /** Present when the wizard ran the install phase after "Review & run". */
+  install?: { aborted: boolean; results: Array<{ id: string; result: StepResult }> };
 }
 
 export interface TuiExistingValues {
@@ -51,6 +59,21 @@ export interface TuiExistingValues {
   cwd: string;
   telegramToken?: string;
   ownerId?: string;
+}
+
+/** Install step for the in-wizard install phase (built by setup.ts). */
+export interface InstallPhaseStep {
+  id: string;
+  title: string;
+  /** Suspend the renderer (leave the alternate screen) while this step runs. */
+  suspendForRun?: boolean;
+  /** Skip decision from the wizard's final collected values. */
+  skipWhen?: (values: TuiValues) => boolean;
+  run: () => Promise<StepResult>;
+}
+
+export interface WizardOptions {
+  steps?: InstallPhaseStep[];
 }
 
 /** What credentials already exist (shown on the auth screen). */
@@ -101,7 +124,7 @@ export function canUseOpentui(): boolean {
  * Run the interactive wizard. Resolves with collected values, or
  * { cancelled: true } when the user quits (Esc / Ctrl+C).
  */
-export async function runTuiSetup(ctx: TuiContext): Promise<TuiOutcome> {
+export async function runTuiSetup(ctx: TuiContext, opts: WizardOptions = {}): Promise<TuiOutcome> {
   const settled = { current: false };
   let resolveOutcome: (outcome: TuiOutcome) => void = () => {};
   const outcome = new Promise<TuiOutcome>((resolve) => {
@@ -136,8 +159,9 @@ export async function runTuiSetup(ctx: TuiContext): Promise<TuiOutcome> {
     resolveOutcome(result);
   };
 
-  const wizard = new Wizard(renderer, ctx);
-  wizard.onFinish = (values: TuiValues) => finish({ cancelled: false, values });
+  const wizard = new Wizard(renderer, ctx, opts);
+  wizard.onFinish = (values: TuiValues, install?: TuiOutcome["install"]) =>
+    finish({ cancelled: false, values, install });
   wizard.onCancel = () => finish({ cancelled: true });
   wizard.start();
 
@@ -178,7 +202,7 @@ function stateFrom(ctx: TuiContext): WizardState {
  * `runTuiSetup` wires it to a real CliRenderer.
  */
 export class Wizard {
-  onFinish: (values: TuiValues) => void = () => {};
+  onFinish: (values: TuiValues, install?: TuiOutcome["install"]) => void = () => {};
   onCancel: () => void = () => {};
 
   private readonly renderer: CliRenderer;
@@ -186,24 +210,49 @@ export class Wizard {
   private readonly state: WizardState;
   private builders: ScreenBuilder[] = [];
   private step = 0;
+  /** In-wizard install steps (empty = no install phase; summary Enter finishes). */
+  private readonly phaseSteps: InstallPhaseStep[];
+  /** collect = value screens; install = running steps; done = final summary. */
+  private phase: "collect" | "install" | "done" = "collect";
+  /** Set when the renderer is destroyed (Ctrl+C / signals) — stops the install pump. */
+  private destroyed = false;
+  private installRun: InstallRunController | null = null;
+  private frameTick = 0;
+  private frameCallback: ((deltaTime: number) => Promise<void>) | null = null;
+  private failureDecision: { resolve: (decision: "retry" | "abort") => void } | null = null;
   /** Input ids for Tab navigation on the current screen. */
   private tabTargets: string[] = [];
   private tabIndex = 0;
   /** First focusable (input or select) of the current screen. */
   private focusRootId: string | undefined;
 
-  constructor(renderer: CliRenderer, ctx: TuiContext) {
+  constructor(renderer: CliRenderer, ctx: TuiContext, opts: WizardOptions = {}) {
     this.renderer = renderer;
     this.ctx = ctx;
     this.state = stateFrom(ctx);
+    this.phaseSteps = opts.steps ?? [];
+    // Ctrl+C / signal destroy: stop the install pump so no further steps run
+    // and any pending failure decision resolves as abort (no orphaned installs).
+    this.renderer.on?.("destroy", this.handleDestroy);
   }
+
+  private readonly handleDestroy = (): void => {
+    this.destroyed = true;
+    this.clearSpinner();
+    this.resolveFailure("abort");
+  };
 
   start(): void {
     this.builders = this.screens();
     this.renderer.keyInput.on("keypress", (key) => {
       if (key.name === "escape") {
-        if (this.step === 0) this.onCancel();
-        else this.back();
+        if (this.phase === "collect") {
+          if (this.step === 0) this.onCancel();
+          else this.back();
+        } else if (this.phase === "install") {
+          const failedId = this.installRun?.failedStepId;
+          if (failedId && this.installRun?.canAbort(failedId)) this.resolveFailure("abort");
+        }
         return;
       }
       if (key.name === "tab" && this.tabTargets.length) {
@@ -213,13 +262,20 @@ export class Wizard {
         return;
       }
       if (key.name === "enter" || key.name === "return") {
-        if (this.step === 0) {
-          key.preventDefault();
-          this.next();
-        } else if (this.step === this.builders.length - 1) {
+        if (this.phase === "collect") {
+          if (this.step === 0) {
+            key.preventDefault();
+            this.next();
+          } else if (this.step === this.builders.length - 1) {
+            key.preventDefault();
+            if (this.phaseSteps.length) void this.startInstall();
+            else this.finish();
+          }
+        } else if (this.phase === "done") {
           key.preventDefault();
           this.finish();
         }
+        // install phase: the Retry/Abort select handles Enter itself
       }
     });
     this.show();
@@ -285,7 +341,12 @@ export class Wizard {
     this.tabTargets = [];
     this.tabIndex = 0;
     this.focusRootId = undefined;
-    const vnode = this.builders[this.step]();
+    const vnode =
+      this.phase === "collect"
+        ? this.builders[this.step]()
+        : this.phase === "install"
+          ? this.installScreen()
+          : this.doneScreen();
     this.renderer.root.add(vnode);
     // Focus the first focusable (input or select) — leaving the previous
     // screen's focused renderable in place would keep feeding it keys.
@@ -306,9 +367,9 @@ export class Wizard {
     }
   }
 
-  private finish(): void {
+  private collectValues(): TuiValues {
     const s = this.state;
-    const values: TuiValues = {
+    return {
       agentName: s.agentName.trim() || "Disk",
       model: s.model?.trim() || undefined,
       cwd: s.cwd.trim() || undefined,
@@ -319,7 +380,232 @@ export class Wizard {
       skipLogin: s.skipLogin,
       loginProvider: s.loginProvider,
     };
-    this.onFinish(values);
+  }
+
+  private finish(): void {
+    const install = this.installRun
+      ? {
+          aborted: this.installRun.aborted,
+          results: this.installRun.steps
+            .filter((s) => s.result)
+            .map((s) => ({ id: s.id, result: s.result as StepResult })),
+        }
+      : undefined;
+    this.onFinish(this.collectValues(), install);
+  }
+
+  // ── Install phase ───────────────────────────────────────────────────
+
+  private async startInstall(): Promise<void> {
+    this.phase = "install";
+    const values = this.collectValues();
+    const run = createInstallRun(this.phaseSteps);
+    this.installRun = run;
+    for (const s of this.phaseSteps) {
+      if (s.skipWhen?.(values)) run.skip(s.id);
+    }
+    this.show();
+    await this.pumpInstall();
+  }
+
+  private async pumpInstall(): Promise<void> {
+    const run = this.installRun;
+    if (!run) return;
+    let id = run.nextPendingId();
+    while (id !== null) {
+      if (this.destroyed) {
+        run.abort();
+        break;
+      }
+      const view = run.steps.find((s) => s.id === id);
+      const suspended = Boolean(view?.suspendForRun);
+      this.ensureSpinner();
+      if (suspended) this.suspendRenderer();
+      try {
+        await run.runStep(id, () => this.show());
+      } finally {
+        if (suspended) this.resumeRenderer();
+      }
+      this.clearSpinner();
+      if (this.destroyed) {
+        run.abort();
+        break;
+      }
+      if (run.failedStepId) {
+        this.show();
+        const decision = await this.waitForFailureDecision();
+        id = decision === "abort" ? null : run.failedStepId;
+        if (decision === "abort") run.abort();
+      } else {
+        id = run.nextPendingId();
+      }
+    }
+    this.clearSpinner();
+    this.phase = "done";
+    this.show();
+  }
+
+  private waitForFailureDecision(): Promise<"retry" | "abort"> {
+    return new Promise((resolve) => {
+      this.failureDecision = { resolve };
+    });
+  }
+
+  private resolveFailure(decision: "retry" | "abort"): void {
+    this.failureDecision?.resolve(decision);
+    this.failureDecision = null;
+  }
+
+  private suspendRenderer(): void {
+    try {
+      this.renderer.suspend();
+    } catch {
+      /* test renderer may not support suspend */
+    }
+  }
+
+  private resumeRenderer(): void {
+    try {
+      this.renderer.resume();
+    } catch {
+      /* test renderer may not support resume */
+    }
+  }
+
+  private ensureSpinner(): void {
+    if (this.frameCallback) return;
+    const cb = async (): Promise<void> => {
+      this.frameTick += 1;
+      if (this.frameTick % 6 === 0 && this.phase === "install") this.show();
+    };
+    this.frameCallback = cb;
+    try {
+      this.renderer.setFrameCallback(cb);
+    } catch {
+      this.frameCallback = null;
+    }
+  }
+
+  private clearSpinner(): void {
+    if (!this.frameCallback) return;
+    try {
+      this.renderer.removeFrameCallback(this.frameCallback);
+    } catch {
+      /* noop */
+    }
+    this.frameCallback = null;
+  }
+
+  private installScreen(): VChild {
+    const run = this.installRun;
+    const rows: VChild[] = (run?.steps ?? []).map((s) => {
+      const glyph =
+        s.status === "done"
+          ? "✓"
+          : s.status === "failed"
+            ? "✗"
+            : s.status === "running"
+              ? "▶"
+              : s.status === "pending"
+                ? "○"
+                : "–";
+      const color =
+        s.status === "done"
+          ? C.ok
+          : s.status === "failed"
+            ? "#FF6B6B"
+            : s.status === "running"
+              ? C.accent
+              : C.dim;
+      const spinner =
+        s.status === "running"
+          ? ` ${["◐", "◓", "◑", "◒"][Math.floor(this.frameTick / 6) % 4]}`
+          : "";
+      return Box(
+        { flexDirection: "row", gap: 1 },
+        Text({ content: glyph, fg: color }),
+        Text({
+          content: s.title,
+          fg: s.status === "done" || s.status === "failed" ? "#FFFFFF" : C.label,
+        }),
+        Text({ content: spinner, fg: C.accent }),
+      );
+    });
+
+    const body: VChild[] = [...rows, Text({ content: " " })];
+
+    const failed = run?.steps.find((s) => s.status === "failed");
+    if (failed?.result && !failed.result.ok) {
+      const r = failed.result;
+      const detailLines: string[] = [];
+      if (r.exitCode !== undefined && r.exitCode !== null) {
+        detailLines.push(`exit code: ${r.exitCode}`);
+      }
+      const tail = stderrTail(r.stderrTail ?? r.detail);
+      if (tail) detailLines.push(tail);
+      body.push(
+        Text({ content: `Failed: ${failed.title}`, fg: "#FF6B6B" }),
+        ...detailLines.map((l) => Text({ content: `  ${l}`, fg: C.dim })),
+        Text({ content: " " }),
+      );
+      this.focusRootId = "fail-select";
+      const select = Select({
+        id: "fail-select",
+        width: WIDTH,
+        height: 4,
+        options: [
+          { name: "Retry", description: "re-run this step", value: "retry" },
+          { name: "Abort", description: "stop setup", value: "abort" },
+        ],
+        selectedIndex: 0,
+        showDescription: true,
+        selectedBackgroundColor: "#2E3A4A",
+        selectedTextColor: C.accent,
+        descriptionColor: C.label,
+      });
+      select.on(SelectRenderableEvents.ITEM_SELECTED, (index, option) => {
+        void index;
+        this.resolveFailure(option.value === "retry" ? "retry" : "abort");
+      });
+      body.push(select);
+    }
+
+    return this.shell(
+      "Setup — installing",
+      body,
+      failed ? "↑/↓  choose   ·   Enter  confirm   ·   Esc  abort" : undefined,
+    );
+  }
+
+  private doneScreen(): VChild {
+    const run = this.installRun;
+    const rows: VChild[] = (run?.steps ?? []).map((s) => {
+      const glyph = s.status === "done" ? "✓" : "–";
+      const color = s.status === "done" ? C.ok : C.dim;
+      // Aborted steps keep their failed result; clamp the line to the box width.
+      const note =
+        s.result && !s.result.ok ? ` — ${s.result.detail.split("\n")[0]?.slice(0, 60) ?? ""}` : "";
+      return Box(
+        { flexDirection: "row", gap: 1 },
+        Text({ content: glyph, fg: color }),
+        Text({ content: `${s.title}${note}`, fg: "#FFFFFF" }),
+      );
+    });
+    const aborted = Boolean(run?.aborted);
+    return this.shell(
+      aborted ? "Setup aborted" : "Setup complete",
+      [
+        ...rows,
+        Text({ content: " " }),
+        Text({
+          content: aborted
+            ? "Installs were aborted — partial changes may remain."
+            : "All install steps finished.",
+          fg: aborted ? C.accent : C.ok,
+        }),
+      ],
+      "Enter  finish",
+    );
   }
 
   // ── Screens ──────────────────────────────────────────────────────────
@@ -715,7 +1001,7 @@ export class Wizard {
           ),
         ),
         Text({ content: " " }),
-        Text({ content: "Running installs will print progress below.", fg: C.dim }),
+        Text({ content: "Installs run inside the wizard with live status.", fg: C.dim }),
       ],
       "Enter  run setup   ·   Esc  back",
     );

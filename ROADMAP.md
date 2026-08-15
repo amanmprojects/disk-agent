@@ -6,7 +6,7 @@ is a backlog, not a promise.
 
 ## Setup wizard (OpenTUI)
 
-- [ ] **Live progress screen for install steps** — the wizard currently destroys the
+- [x] **Live progress screen for install steps** — the wizard currently destroys the
       renderer after "Review & run" and installs print to the console. Suspend/resume
       the renderer around `ensurePi` / `ensurePiPackages` / `ensureAgentBrowser` / login
       and show per-step status + failure details inside the TUI.

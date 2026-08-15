@@ -311,7 +311,11 @@ describe("Gateway", () => {
 
     it("/skills lists the catalog (host env may add skills)", async () => {
       const r = await gw.handleIncoming(msg("/skills"));
-      assert.ok(r.startsWith("Skills (") || r.startsWith("No skills yet"), r);
+      if (r.startsWith("No skills yet")) {
+        assert.ok(r.includes("/skills create"), r);
+        return;
+      }
+      assert.ok(r.startsWith("Skills ("), r);
       assert.ok(r.includes("Use: /skills use <name>"));
       assert.ok(r.includes("Create: /skills create"));
     });

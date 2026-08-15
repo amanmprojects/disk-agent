@@ -4,6 +4,14 @@
 
 ### Setup
 
+- **Live install progress inside the TUI wizard** — the wizard no longer drops to raw
+  console output after "Review & run". The install steps (Pi CLI, Pi extensions,
+  agent-browser + Chrome, auth) now run inside the wizard with per-step status
+  (pending → running → done/failed), a spinner for the active step, and failure details
+  (exit code + stderr tail) with an in-TUI Retry/Abort choice. The renderer is suspended
+  around the interactive login step and resumed afterwards; the classic readline flow
+  (`--no-tui`) is unchanged. Pure install-run state machine lives in
+  `src/setup/install-steps.ts` (unit-tested under plain Node; wizard screens under Bun).
 - **`--tui` force flag** — `disk-agent setup --tui` forces the OpenTUI wizard even when the
   TTY check wouldn't auto-engage (pty-driven scripting, CI screenshots); it still re-execs
   under bun when the runtime can't render. `--no-tui` keeps forcing classic prompts.

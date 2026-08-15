@@ -1,0 +1,8 @@
+# dev-loops repo configuration (see dev-loops/docs/artifact-authority-contract.md)
+#
+# Relaxed async-start posture for this repo: the Pi runtime in use does not
+# inject DEVLOOPS_RUN_ID on subagent dispatch, so PR-followup routes fail
+# closed under the default `required` mode. Maintainer-authorized relaxation.
+version: 1
+workflow:
+  asyncStartMode: allowed

@@ -24,8 +24,9 @@ import {
   piSettingsPath,
   resolvePiAgentDir,
 } from "./paths.js";
+import { type StepResult, stderrTail } from "./setup/install-steps.js";
 import { collectPiModels, readPiAuthProviders, readPiDefault } from "./setup/pi-import.js";
-import { canUseOpentui, runTuiSetup, type TuiValues } from "./setup/tui.js";
+import { canUseOpentui, type InstallPhaseStep, runTuiSetup, type TuiValues } from "./setup/tui.js";
 import { getVersion } from "./version.js";
 
 const require = createRequire(import.meta.url);
@@ -224,6 +225,7 @@ export async function ensurePi(opts?: { skipGlobalInstall?: boolean }): Promise<
   binary: string | null;
   installed: boolean;
   detail: string;
+  exitCode?: number | null;
 }> {
   let binary = resolvePiBinary();
   if (binary) {
@@ -248,6 +250,7 @@ export async function ensurePi(opts?: { skipGlobalInstall?: boolean }): Promise<
       binary: null,
       installed: false,
       detail: `failed to install pi: ${npm.stderr.trim() || npm.stdout.trim() || "unknown error"}`,
+      exitCode: npm.code,
     };
   }
 
@@ -299,18 +302,19 @@ function packageListed(packages: string[] | undefined, spec: string): boolean {
 export function ensurePiPackages(
   piBinary: string | null,
   packages: string[],
-): { installed: string[]; failed: Array<{ pkg: string; error: string }> } {
+  opts?: { quiet?: boolean },
+): { installed: string[]; failed: Array<{ pkg: string; error: string; code?: number | null }> } {
   const agentDir = resolvePiAgentDir();
   mkdirSync(agentDir, { recursive: true });
 
   const installed: string[] = [];
-  const failed: Array<{ pkg: string; error: string }> = [];
+  const failed: Array<{ pkg: string; error: string; code?: number | null }> = [];
   const settings = readPiSettings(agentDir);
   const current = Array.isArray(settings.packages) ? [...settings.packages] : [];
 
   for (const pkg of packages) {
     if (packageListed(current, pkg)) {
-      ok(`${pkg} already in pi settings`);
+      if (!opts?.quiet) ok(`${pkg} already in pi settings`);
       installed.push(pkg);
       continue;
     }
@@ -323,7 +327,7 @@ export function ensurePiPackages(
 
       if (result.ok) {
         installed.push(pkg);
-        ok(`installed ${pkg}`);
+        if (!opts?.quiet) ok(`installed ${pkg}`);
         // refresh settings view
         const refreshed = readPiSettings(agentDir);
         if (Array.isArray(refreshed.packages)) {
@@ -334,9 +338,11 @@ export function ensurePiPackages(
         continue;
       }
 
-      warn(
-        `pi install failed for ${pkg}: ${(result.stderr || result.stdout).trim().slice(0, 200)}`,
-      );
+      if (!opts?.quiet) {
+        warn(
+          `pi install failed for ${pkg}: ${(result.stderr || result.stdout).trim().slice(0, 200)}`,
+        );
+      }
     }
 
     // Manual settings registration + ensure npm package under pi agent npm tree
@@ -354,11 +360,12 @@ export function ensurePiPackages(
     ]);
     if (npmInstall.ok) {
       installed.push(pkg);
-      ok(`registered ${pkg} in ${piSettingsPath(agentDir)}`);
+      if (!opts?.quiet) ok(`registered ${pkg} in ${piSettingsPath(agentDir)}`);
     } else {
       failed.push({
         pkg,
         error: npmInstall.stderr.trim() || npmInstall.stdout.trim() || "install failed",
+        code: npmInstall.code,
       });
     }
   }
@@ -370,11 +377,15 @@ export function ensurePiPackages(
  * Install agent-browser CLI globally and download Chrome (first-time).
  * Docs: https://agent-browser.dev/
  */
-export async function ensureAgentBrowser(opts?: { skipChrome?: boolean }): Promise<{
+export async function ensureAgentBrowser(opts?: {
+  skipChrome?: boolean;
+  quiet?: boolean;
+}): Promise<{
   cli: string | null;
   installed: boolean;
   chromeOk: boolean;
   detail: string;
+  exitCode?: number | null;
 }> {
   let cli = whichCmd("agent-browser");
 
@@ -386,6 +397,7 @@ export async function ensureAgentBrowser(opts?: { skipChrome?: boolean }): Promi
         installed: false,
         chromeOk: false,
         detail: `npm install -g agent-browser failed: ${npm.stderr.trim() || npm.stdout.trim() || "unknown"}`,
+        exitCode: npm.code,
       };
     }
     cli = whichCmd("agent-browser");
@@ -397,9 +409,9 @@ export async function ensureAgentBrowser(opts?: { skipChrome?: boolean }): Promi
         detail: "agent-browser installed but binary not found on PATH",
       };
     }
-    ok(`agent-browser installed → ${cli}`);
+    if (!opts?.quiet) ok(`agent-browser installed → ${cli}`);
   } else {
-    ok(`agent-browser found → ${cli}`);
+    if (!opts?.quiet) ok(`agent-browser found → ${cli}`);
   }
 
   if (opts?.skipChrome) {
@@ -414,7 +426,7 @@ export async function ensureAgentBrowser(opts?: { skipChrome?: boolean }): Promi
   // Download Chrome / browser backend for first-time use
   const install = runCmd(cli, ["install"], { timeoutMs: 600_000 });
   if (install.ok) {
-    ok("browser backend ready (Chrome)");
+    if (!opts?.quiet) ok("browser backend ready (Chrome)");
     return {
       cli,
       installed: true,
@@ -424,14 +436,17 @@ export async function ensureAgentBrowser(opts?: { skipChrome?: boolean }): Promi
   }
 
   // Some versions already have Chrome — treat non-zero with existing CLI as soft fail
-  warn(
-    `agent-browser install: ${(install.stderr || install.stdout).trim().slice(0, 200) || "non-zero exit"}`,
-  );
+  if (!opts?.quiet) {
+    warn(
+      `agent-browser install: ${(install.stderr || install.stdout).trim().slice(0, 200) || "non-zero exit"}`,
+    );
+  }
   return {
     cli,
     installed: true,
     chromeOk: false,
     detail: "CLI installed; Chrome download may need: agent-browser install",
+    exitCode: install.code,
   };
 }
 
@@ -551,6 +566,34 @@ function resolveExistingValues(
   };
 }
 
+export interface CollectedUserConfig {
+  agentName: string;
+  model?: string;
+  telegramToken?: string;
+  ownerId?: string;
+  cwd?: string;
+}
+
+/** Apply collected user config to cfg + env (no output). */
+function applyUserConfig(cfg: AppConfig, paths: DiskAgentPaths, user: CollectedUserConfig): void {
+  cfg.agentName = user.agentName;
+  if (user.model) applyModel(cfg, user.model);
+  if (user.cwd) cfg.cwd = user.cwd;
+  if (user.telegramToken) {
+    cfg.telegram.botToken = user.telegramToken;
+    cfg.telegram.enabled = true;
+  }
+  if (user.ownerId) cfg.telegram.ownerId = String(user.ownerId);
+
+  saveConfig(cfg);
+  upsertEnv(paths.envFile, {
+    TELEGRAM_BOT_TOKEN: user.telegramToken,
+    DISK_AGENT_OWNER_ID: user.ownerId,
+    DISK_AGENT_MODEL: user.model || `${cfg.model.provider}/${cfg.model.id}`,
+    DISK_AGENT_CWD: user.cwd,
+  });
+}
+
 /**
  * Interactive prompts for agent name, model, Telegram, owner, cwd.
  * Flags / existing env take precedence; --yes skips prompts (keeps defaults / flags).
@@ -559,13 +602,7 @@ async function collectUserConfig(
   cfg: AppConfig,
   paths: DiskAgentPaths,
   opts: SetupOptions,
-): Promise<{
-  agentName: string;
-  model?: string;
-  telegramToken?: string;
-  ownerId?: string;
-  cwd?: string;
-}> {
+): Promise<CollectedUserConfig> {
   const existing = resolveExistingValues(cfg, paths, opts);
   const {
     agentName: existingName,
@@ -630,6 +667,176 @@ async function collectUserConfig(
   };
 }
 
+function okResult(detail: string): StepResult {
+  return { ok: true, detail };
+}
+
+function failResult(
+  detail: string,
+  opts?: { exitCode?: number | null; stderrTail?: string },
+): StepResult {
+  return {
+    ok: false,
+    detail: detail.slice(0, 400),
+    exitCode: opts?.exitCode,
+    stderrTail: opts?.stderrTail,
+  };
+}
+
+/** Structured values the in-wizard install steps write back for SetupResult. */
+interface InstallCtx {
+  piBinary: string | null;
+  piInstalled: boolean;
+  packagesInstalled: string[];
+  browser: SetupResult["browser"];
+  authAttempted: boolean;
+  authOk: boolean;
+  authDetail: string;
+  webSearchExt: string | null;
+}
+
+function createInstallCtx(): InstallCtx {
+  return {
+    piBinary: null,
+    piInstalled: false,
+    packagesInstalled: [],
+    browser: { cli: null, installed: false, chromeOk: false, detail: "not run" },
+    authAttempted: false,
+    authOk: false,
+    authDetail: "",
+    webSearchExt: null,
+  };
+}
+
+/** Wizard install steps for steps 3–6; run inside the TUI after "Review & run". */
+function buildInstallSteps(opts: SetupOptions, ctx: InstallCtx): InstallPhaseStep[] {
+  const wanted = [...new Set([...(opts.packages ?? DEFAULT_PI_PACKAGES)])];
+  return [
+    {
+      id: "pi",
+      title: "Install Pi coding-agent CLI",
+      skipWhen: (v) => v.skipPi,
+      run: async () => {
+        const r = await ensurePi();
+        ctx.piBinary = r.binary;
+        ctx.piInstalled = r.installed;
+        return r.installed
+          ? okResult(r.detail)
+          : failResult(r.detail, {
+              exitCode: r.exitCode ?? null,
+              stderrTail: stderrTail(r.detail),
+            });
+      },
+    },
+    {
+      id: "extensions",
+      title: "Install Pi extensions (pi-web-search, …)",
+      skipWhen: (v) => v.skipPi,
+      run: async () => {
+        const result = ensurePiPackages(ctx.piBinary, wanted, { quiet: true });
+        ctx.packagesInstalled = result.installed;
+        ctx.webSearchExt = resolveWebSearchExtension();
+        if (result.failed.length) {
+          const first = result.failed[0];
+          const errors = result.failed.map((f) => f.error).join("\n");
+          return failResult(result.failed.map((f) => `${f.pkg}: ${f.error}`).join("\n"), {
+            exitCode: first?.code ?? null,
+            stderrTail: stderrTail(errors),
+          });
+        }
+        return okResult(
+          result.installed.length
+            ? `installed: ${result.installed.join(", ")}`
+            : "already installed",
+        );
+      },
+    },
+    {
+      id: "browser",
+      title: "Install agent-browser + Chrome",
+      skipWhen: (v) => v.skipBrowser,
+      run: async () => {
+        const r = await ensureAgentBrowser({ quiet: true });
+        ctx.browser = {
+          cli: r.cli,
+          installed: r.installed,
+          chromeOk: r.chromeOk,
+          detail: r.detail,
+        };
+        return r.installed
+          ? okResult(r.detail)
+          : failResult(r.detail, {
+              exitCode: r.exitCode ?? null,
+              stderrTail: stderrTail(r.detail),
+            });
+      },
+    },
+    {
+      id: "auth",
+      title: "Authenticate (OpenCode Go API key)",
+      suspendForRun: true,
+      skipWhen: (v) => v.skipLogin,
+      run: async () => {
+        const already = await hasAnyAuth();
+        if (already && !opts.forceLogin) {
+          ctx.authAttempted = false;
+          ctx.authOk = true;
+          ctx.authDetail = "credentials already present";
+          return okResult("credentials already present");
+        }
+        ctx.authAttempted = true;
+        const result = await loginProvider("opencode-go", {
+          type: "api_key",
+          force: opts.forceLogin,
+        });
+        ctx.authOk = result.ok;
+        ctx.authDetail = result.ok ? "logged in as opencode-go" : result.error;
+        if (result.ok) return okResult("logged in as opencode-go");
+        return failResult(
+          `${result.error}\nRetry later: disk-agent login opencode-go --type api_key`,
+          { stderrTail: stderrTail(result.error) },
+        );
+      },
+    },
+  ];
+}
+
+/** SetupResult from in-wizard install results (TUI mode). */
+function setupResultFromCtx(
+  version: string,
+  paths: DiskAgentPaths,
+  ctx: InstallCtx,
+  opts: { aborted?: boolean },
+): SetupResult {
+  const agentDir = resolvePiAgentDir();
+  const finalCfg = loadConfig({ dataDir: paths.home, workspaceDir: paths.workspace });
+  return {
+    cfg: finalCfg,
+    paths,
+    pi: {
+      binary: ctx.piBinary,
+      installed: ctx.piInstalled,
+      packages: ctx.packagesInstalled,
+      agentDir,
+    },
+    browser: ctx.browser,
+    telegram: {
+      configured: Boolean(
+        finalCfg.telegram.botToken ||
+          process.env.TELEGRAM_BOT_TOKEN ||
+          readEnvValue(paths.envFile, "TELEGRAM_BOT_TOKEN"),
+      ),
+    },
+    webSearchExtension: ctx.webSearchExt,
+    auth: {
+      attempted: ctx.authAttempted,
+      ok: ctx.authOk,
+      detail: opts.aborted ? "aborted" : ctx.authDetail,
+    },
+    version,
+  };
+}
+
 /**
  * Full first-run setup. Idempotent — safe to re-run.
  */
@@ -649,6 +856,10 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
   // ── TUI wizard (--tui forces it; --no-tui / --yes keep the classic flow) ──
   // Auto mode engages when interactive. Forced mode skips the TTY check so
   // pty-driven scripting / CI screenshots can request the wizard explicitly.
+  // Set when the wizard ran the install phase inside the TUI (steps 3–6 done).
+  let tuiInstallsRan = false;
+  let installCtx: InstallCtx | null = null;
+
   const wantTui = opts.tui === true || (opts.tui !== false && !opts.yes && isInteractive());
   if (wantTui) {
     if (!canUseOpentui()) {
@@ -674,7 +885,11 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
           Boolean(process.env[k]?.trim()),
         ),
       };
-      const outcome = await runTuiSetup({ version, existing, piInfo, auth });
+      installCtx = createInstallCtx();
+      const outcome = await runTuiSetup(
+        { version, existing, piInfo, auth },
+        { steps: buildInstallSteps(opts, installCtx) },
+      );
       if (outcome.cancelled && !outcome.rendererFailed) {
         console.log(chalk.yellow("\n  Setup cancelled — nothing changed."));
         return cancelledResult(version, paths);
@@ -682,231 +897,239 @@ export async function runSetup(opts: SetupOptions = {}): Promise<SetupResult> {
       if (!outcome.rendererFailed && outcome.values) {
         opts = { ...opts, ...tuiValuesToOptions(outcome.values) };
       }
+      if (outcome.install) {
+        tuiInstallsRan = true;
+        if (outcome.install.aborted) {
+          // Persist the wizard's collected values before returning — aborting
+          // the installs must not discard the configuration the user entered.
+          const user = await collectUserConfig(bootstrapCfg, paths, opts);
+          applyUserConfig(bootstrapCfg, paths, user);
+          console.log(
+            chalk.yellow("\n  Setup cancelled — installs aborted (partial changes may remain)."),
+          );
+          return setupResultFromCtx(version, paths, installCtx, { aborted: true });
+        }
+      }
       // rendererFailed → fall through to classic prompts
     }
   }
 
   const total = 7;
-  console.log(chalk.bold.cyan(`\nDisk Agent v${version} — setup\n`));
-  console.log(
-    chalk.dim(
-      "This wizard installs Pi, pi-web-search, agent-browser, and configures home + Telegram.\n" +
-        "Auth: OpenCode Go subscription (API key, opencode.ai) or your own provider keys.\n",
-    ),
-  );
+  if (!tuiInstallsRan) {
+    console.log(chalk.bold.cyan(`\nDisk Agent v${version} — setup\n`));
+    console.log(
+      chalk.dim(
+        "This wizard installs Pi, pi-web-search, agent-browser, and configures home + Telegram.\n" +
+          "Auth: OpenCode Go subscription (API key, opencode.ai) or your own provider keys.\n",
+      ),
+    );
+  }
 
   // ── 1. Home layout ──────────────────────────────────────────────────────
-  step(1, total, "Initialize standardized home directory");
+  if (!tuiInstallsRan) step(1, total, "Initialize standardized home directory");
   const cfg = bootstrapHome({
     dataDir: paths.home,
     workspaceDir: paths.workspace,
     agentName: opts.agentName ?? "Disk",
   });
-  ok(`home:      ${paths.home}`);
-  ok(`workspace: ${paths.workspace}`);
-  ok(`config:    ${paths.configFile}`);
-  ok(`skills:    ${paths.workspaceSkills} (workspace), ${paths.userSkills} (user)`);
-  ok(
-    "layout:\n" +
-      describeLayout(paths)
-        .split("\n")
-        .map((l) => `      ${l}`)
-        .join("\n"),
-  );
+  if (!tuiInstallsRan) {
+    ok(`home:      ${paths.home}`);
+    ok(`workspace: ${paths.workspace}`);
+    ok(`config:    ${paths.configFile}`);
+    ok(`skills:    ${paths.workspaceSkills} (workspace), ${paths.userSkills} (user)`);
+    ok(
+      "layout:\n" +
+        describeLayout(paths)
+          .split("\n")
+          .map((l) => `      ${l}`)
+          .join("\n"),
+    );
+  }
 
   // ── 2. Interactive config (Telegram, model, …) ──────────────────────────
-  step(2, total, "Agent, Telegram & model configuration");
+  if (!tuiInstallsRan) step(2, total, "Agent, Telegram & model configuration");
   const user = await collectUserConfig(cfg, paths, opts);
+  applyUserConfig(cfg, paths, user);
 
-  cfg.agentName = user.agentName;
-  if (user.model) applyModel(cfg, user.model);
-  if (user.cwd) cfg.cwd = user.cwd;
-  if (user.telegramToken) {
-    cfg.telegram.botToken = user.telegramToken;
-    cfg.telegram.enabled = true;
-  }
-  if (user.ownerId) cfg.telegram.ownerId = String(user.ownerId);
-
-  saveConfig(cfg);
-  upsertEnv(paths.envFile, {
-    TELEGRAM_BOT_TOKEN: user.telegramToken,
-    DISK_AGENT_OWNER_ID: user.ownerId,
-    DISK_AGENT_MODEL: user.model || `${cfg.model.provider}/${cfg.model.id}`,
-    DISK_AGENT_CWD: user.cwd,
-  });
-
-  ok(`agent:     ${cfg.agentName}`);
-  ok(`model:     ${cfg.model.provider}/${cfg.model.id}`);
-  ok(`cwd:       ${cfg.cwd}`);
-  if (user.telegramToken) {
-    ok(`telegram:  enabled (token saved to ${paths.envFile})`);
-    if (user.ownerId) ok(`owner:     ${user.ownerId}`);
-  } else {
-    warn(`telegram:  not configured — add TELEGRAM_BOT_TOKEN to ${paths.envFile}`);
-  }
-
-  // ── 3. Pi CLI ───────────────────────────────────────────────────────────
-  step(3, total, "Ensure Pi coding-agent CLI");
-  let piBinary: string | null = null;
-  let piInstalled = false;
-  if (opts.skipPi) {
-    piBinary = resolvePiBinary();
-    piInstalled = Boolean(piBinary);
-    warn("skipped pi install (--skip-pi)");
-  } else {
-    const pi = await ensurePi();
-    piBinary = pi.binary;
-    piInstalled = pi.installed;
-    if (pi.installed) ok(pi.detail);
-    else fail(pi.detail);
-  }
-
-  const agentDir = resolvePiAgentDir();
-  ok(`pi agent dir: ${agentDir}`);
-
-  // ── 4. Pi extensions ────────────────────────────────────────────────────
-  step(4, total, "Install Pi extensions (pi-web-search, pi-agent-browser-native, …)");
-  const wanted = [...new Set([...(opts.packages ?? DEFAULT_PI_PACKAGES)])];
-  let packagesInstalled: string[] = [];
-  if (opts.skipPi) {
-    warn("skipped package install");
-    packagesInstalled = wanted.filter((p) => packageListed(readPiSettings(agentDir).packages, p));
-  } else {
-    const result = ensurePiPackages(piBinary, wanted);
-    packagesInstalled = result.installed;
-    for (const f of result.failed) {
-      fail(`${f.pkg}: ${f.error}`);
+  if (!tuiInstallsRan) {
+    ok(`agent:     ${cfg.agentName}`);
+    ok(`model:     ${cfg.model.provider}/${cfg.model.id}`);
+    ok(`cwd:       ${cfg.cwd}`);
+    if (user.telegramToken) {
+      ok(`telegram:  enabled (token saved to ${paths.envFile})`);
+      if (user.ownerId) ok(`owner:     ${user.ownerId}`);
+    } else {
+      warn(`telegram:  not configured — add TELEGRAM_BOT_TOKEN to ${paths.envFile}`);
     }
   }
 
-  const webSearchExt = resolveWebSearchExtension();
-  if (webSearchExt) ok(`pi-web-search extension: ${webSearchExt}`);
-  else warn("pi-web-search extension not resolved — npm i pi-web-search");
-
-  if (packageListed(packagesInstalled, "npm:pi-agent-browser-native")) {
-    ok("pi-agent-browser-native registered");
-  }
-  if (packageListed(packagesInstalled, "npm:pi-web-search")) {
-    ok("pi-web-search registered");
-  }
-
-  // ── 5. agent-browser CLI + Chrome ───────────────────────────────────────
-  step(5, total, `Install agent-browser (${AGENT_BROWSER_DOCS})`);
-  let browserResult: SetupResult["browser"] = {
+  // ── 3–6. Install steps ─────────────────────────────────────────────────
+  // TUI mode: these already ran inside the wizard (results in installCtx).
+  let piBinary: string | null = installCtx?.piBinary ?? null;
+  let piInstalled = installCtx?.piInstalled ?? false;
+  let packagesInstalled: string[] = installCtx?.packagesInstalled ?? [];
+  let webSearchExt: string | null = installCtx?.webSearchExt ?? null;
+  let browserResult: SetupResult["browser"] = installCtx?.browser ?? {
     cli: whichCmd("agent-browser"),
     installed: Boolean(whichCmd("agent-browser")),
     chromeOk: false,
     detail: "skipped",
   };
+  let authAttempted = installCtx?.authAttempted ?? false;
+  let authOk = installCtx?.authOk ?? false;
+  let authDetail = installCtx?.authDetail ?? "";
+  const agentDir = resolvePiAgentDir();
 
-  if (opts.skipBrowser) {
-    warn("skipped agent-browser (--skip-browser)");
-    browserResult.detail = "skipped (--skip-browser)";
-  } else if (opts.yes) {
-    browserResult = await ensureAgentBrowser();
-    // Success lines already printed by ensureAgentBrowser
-    if (!browserResult.installed) fail(browserResult.detail);
-  } else {
-    const want =
-      browserResult.installed ||
-      (await confirm("Install agent-browser for full browser automation? (recommended)", true));
-    if (want) {
+  if (!tuiInstallsRan) {
+    // ── 3. Pi CLI ──────────────────────────────────────────────────────
+    step(3, total, "Ensure Pi coding-agent CLI");
+    if (opts.skipPi) {
+      piBinary = resolvePiBinary();
+      piInstalled = Boolean(piBinary);
+      warn("skipped pi install (--skip-pi)");
+    } else {
+      const pi = await ensurePi();
+      piBinary = pi.binary;
+      piInstalled = pi.installed;
+      if (pi.installed) ok(pi.detail);
+      else fail(pi.detail);
+    }
+    ok(`pi agent dir: ${agentDir}`);
+
+    // ── 4. Pi extensions ───────────────────────────────────────────────
+    step(4, total, "Install Pi extensions (pi-web-search, pi-agent-browser-native, …)");
+    const wanted = [...new Set([...(opts.packages ?? DEFAULT_PI_PACKAGES)])];
+    if (opts.skipPi) {
+      warn("skipped package install");
+      packagesInstalled = wanted.filter((p) => packageListed(readPiSettings(agentDir).packages, p));
+    } else {
+      const result = ensurePiPackages(piBinary, wanted);
+      packagesInstalled = result.installed;
+      for (const f of result.failed) {
+        fail(`${f.pkg}: ${f.error}`);
+      }
+    }
+
+    webSearchExt = resolveWebSearchExtension();
+    if (webSearchExt) ok(`pi-web-search extension: ${webSearchExt}`);
+    else warn("pi-web-search extension not resolved — npm i pi-web-search");
+
+    if (packageListed(packagesInstalled, "npm:pi-agent-browser-native")) {
+      ok("pi-agent-browser-native registered");
+    }
+    if (packageListed(packagesInstalled, "npm:pi-web-search")) {
+      ok("pi-web-search registered");
+    }
+
+    // ── 5. agent-browser CLI + Chrome ──────────────────────────────────
+    step(5, total, `Install agent-browser (${AGENT_BROWSER_DOCS})`);
+    if (opts.skipBrowser) {
+      warn("skipped agent-browser (--skip-browser)");
+      browserResult.detail = "skipped (--skip-browser)";
+    } else if (opts.yes) {
       browserResult = await ensureAgentBrowser();
       // Success lines already printed by ensureAgentBrowser
       if (!browserResult.installed) fail(browserResult.detail);
     } else {
-      warn("skipped agent-browser — web_get will use plain fetch only");
-      browserResult.detail = "skipped by user";
-    }
-  }
-
-  // ── 6. Auth ─────────────────────────────────────────────────────────────
-  step(6, total, "Authenticate (OpenCode Go API key)");
-  let authAttempted = false;
-  let authOk = false;
-  let authDetail = "";
-
-  const already = await hasAnyAuth();
-
-  /** Run OpenCode Go API-key login; updates authOk/authDetail. */
-  const loginOpenCodeGo = async (force: boolean): Promise<void> => {
-    authAttempted = true;
-    const result = await loginProvider("opencode-go", { type: "api_key", force });
-    authOk = result.ok;
-    authDetail = result.ok ? "logged in as opencode-go" : result.error;
-    if (result.ok) ok(authDetail);
-    else {
-      fail(authDetail);
-      console.log(
-        chalk.dim("    You can retry later: disk-agent login opencode-go --type api_key"),
-      );
-      console.log(chalk.dim(`    Or set OPENCODE_API_KEY in ${paths.envFile}`));
-    }
-  };
-
-  if (opts.skipLogin) {
-    authDetail = "skipped (--skip-login)";
-    warn(authDetail);
-  } else if (already && !opts.forceLogin) {
-    authOk = true;
-    authDetail = "credentials already present";
-    ok(authDetail);
-    // Already authenticated — still offer to add OpenCode Go (API key)
-    const wantOpenCode =
-      opts.loginProvider === "opencode-go" ||
-      (opts.loginProvider === undefined &&
-        !opts.yes &&
-        (await confirm("Add OpenCode Go subscription (API key) too?", false)));
-    if (wantOpenCode) await loginOpenCodeGo(false);
-  } else {
-    // Pick provider: opencode-go (API key) | none
-    let provider: "opencode-go" | null = null;
-    if (opts.loginProvider) {
-      provider = opts.loginProvider;
-    } else if (opts.login || opts.forceLogin) {
-      provider = "opencode-go"; // --login / --force-login default to OpenCode Go
-    } else if (!opts.yes) {
-      console.log("");
-      console.log(chalk.dim("  Auth options:"));
-      console.log(chalk.dim("    opencode-go — OpenCode Go subscription (API key, opencode.ai)"));
-      const choice = (
-        await ask("Authenticate with (opencode-go, blank to skip)", {
-          defaultValue: "opencode-go",
-        })
-      )
-        .trim()
-        .toLowerCase();
-      provider =
-        choice === "opencode" || choice === "opencode-go" || choice === "og" ? "opencode-go" : null;
+      const want =
+        browserResult.installed ||
+        (await confirm("Install agent-browser for full browser automation? (recommended)", true));
+      if (want) {
+        browserResult = await ensureAgentBrowser();
+        // Success lines already printed by ensureAgentBrowser
+        if (!browserResult.installed) fail(browserResult.detail);
+      } else {
+        warn("skipped agent-browser — web_get will use plain fetch only");
+        browserResult.detail = "skipped by user";
+      }
     }
 
-    const shouldLogin =
-      opts.login === true ||
-      opts.forceLogin === true ||
-      (provider !== null &&
-        !opts.yes &&
-        (await confirm("Configure OpenCode Go API key now?", true)));
+    // ── 6. Auth ────────────────────────────────────────────────────────
+    step(6, total, "Authenticate (OpenCode Go API key)");
+    const already = await hasAnyAuth();
 
-    if (provider && shouldLogin) {
-      await loginOpenCodeGo(Boolean(opts.forceLogin));
-    } else if (!provider) {
-      authDetail = "deferred — run disk-agent login when ready";
+    /** Run OpenCode Go API-key login; updates authOk/authDetail. */
+    const loginOpenCodeGo = async (force: boolean): Promise<void> => {
+      authAttempted = true;
+      const result = await loginProvider("opencode-go", { type: "api_key", force });
+      authOk = result.ok;
+      authDetail = result.ok ? "logged in as opencode-go" : result.error;
+      if (result.ok) ok(authDetail);
+      else {
+        fail(authDetail);
+        console.log(
+          chalk.dim("    You can retry later: disk-agent login opencode-go --type api_key"),
+        );
+        console.log(chalk.dim(`    Or set OPENCODE_API_KEY in ${paths.envFile}`));
+      }
+    };
+
+    if (opts.skipLogin) {
+      authDetail = "skipped (--skip-login)";
       warn(authDetail);
-      if (process.env.OPENCODE_API_KEY || readEnvValue(paths.envFile, "OPENCODE_API_KEY")) {
-        authOk = true;
-        ok("OPENCODE_API_KEY present (opencode / opencode-go)");
-      }
-      if (process.env.ANTHROPIC_API_KEY || readEnvValue(paths.envFile, "ANTHROPIC_API_KEY")) {
-        authOk = true;
-        ok("ANTHROPIC_API_KEY present");
-      }
-      if (process.env.OPENAI_API_KEY || readEnvValue(paths.envFile, "OPENAI_API_KEY")) {
-        authOk = true;
-        ok("OPENAI_API_KEY present");
-      }
+    } else if (already && !opts.forceLogin) {
+      authOk = true;
+      authDetail = "credentials already present";
+      ok(authDetail);
+      // Already authenticated — still offer to add OpenCode Go (API key)
+      const wantOpenCode =
+        opts.loginProvider === "opencode-go" ||
+        (opts.loginProvider === undefined &&
+          !opts.yes &&
+          (await confirm("Add OpenCode Go subscription (API key) too?", false)));
+      if (wantOpenCode) await loginOpenCodeGo(false);
     } else {
-      authDetail = "deferred — run disk-agent login when ready";
-      warn(authDetail);
+      // Pick provider: opencode-go (API key) | none
+      let provider: "opencode-go" | null = null;
+      if (opts.loginProvider) {
+        provider = opts.loginProvider;
+      } else if (opts.login || opts.forceLogin) {
+        provider = "opencode-go"; // --login / --force-login default to OpenCode Go
+      } else if (!opts.yes) {
+        console.log("");
+        console.log(chalk.dim("  Auth options:"));
+        console.log(chalk.dim("    opencode-go — OpenCode Go subscription (API key, opencode.ai)"));
+        const choice = (
+          await ask("Authenticate with (opencode-go, blank to skip)", {
+            defaultValue: "opencode-go",
+          })
+        )
+          .trim()
+          .toLowerCase();
+        provider =
+          choice === "opencode" || choice === "opencode-go" || choice === "og"
+            ? "opencode-go"
+            : null;
+      }
+
+      const shouldLogin =
+        opts.login === true ||
+        opts.forceLogin === true ||
+        (provider !== null &&
+          !opts.yes &&
+          (await confirm("Configure OpenCode Go API key now?", true)));
+
+      if (provider && shouldLogin) {
+        await loginOpenCodeGo(Boolean(opts.forceLogin));
+      } else if (!provider) {
+        authDetail = "deferred — run disk-agent login when ready";
+        warn(authDetail);
+        if (process.env.OPENCODE_API_KEY || readEnvValue(paths.envFile, "OPENCODE_API_KEY")) {
+          authOk = true;
+          ok("OPENCODE_API_KEY present (opencode / opencode-go)");
+        }
+        if (process.env.ANTHROPIC_API_KEY || readEnvValue(paths.envFile, "ANTHROPIC_API_KEY")) {
+          authOk = true;
+          ok("ANTHROPIC_API_KEY present");
+        }
+        if (process.env.OPENAI_API_KEY || readEnvValue(paths.envFile, "OPENAI_API_KEY")) {
+          authOk = true;
+          ok("OPENAI_API_KEY present");
+        }
+      } else {
+        authDetail = "deferred — run disk-agent login when ready";
+        warn(authDetail);
+      }
     }
   }
 

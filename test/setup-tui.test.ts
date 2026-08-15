@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -330,5 +330,491 @@ test("wizard: Esc on welcome cancels", { skip: !IS_BUN }, async () => {
     assert.equal(cancelled, true);
   } finally {
     setup.renderer.destroy();
+  }
+});
+
+// ── Wizard install phase (Bun only) ───────────────────────────────────────
+
+/** Drive the wizard to the summary screen and press Enter to start installs. */
+async function driveToSummary(
+  setup: Awaited<ReturnType<typeof import("@opentui/core/testing")["createTestRenderer"]>>,
+  opts?: { skipBrowser?: boolean },
+): Promise<void> {
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // welcome
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // agent name
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // agent cwd → model
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // model (pi default)
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // telegram token (blank)
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // telegram owner (blank) → pi
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // pi components (yes)
+  await setup.renderOnce();
+  if (opts?.skipBrowser) {
+    setup.mockInput.pressKey("ARROW_DOWN"); // browser: no
+    await setup.renderOnce();
+  }
+  setup.mockInput.pressKey("RETURN"); // browser (yes or no) → auth
+  await setup.renderOnce();
+  setup.mockInput.pressKey("RETURN"); // auth (opencode-go) → summary
+  await setup.renderOnce();
+}
+
+function testCtx(): Parameters<typeof import("../src/setup/tui.js")["Wizard"]>[1] {
+  return {
+    version: "9.9.9-test",
+    existing: { agentName: "Disk", model: "opencode-go/grok-4.5", cwd: "/home/test" },
+    piInfo: {
+      candidates: [
+        {
+          provider: "opencode-go",
+          id: "deepseek-v4-flash",
+          label: "opencode-go/deepseek-v4-flash",
+          source: "pi-default" as const,
+          authed: true,
+        },
+      ],
+      defaultProvider: "opencode-go",
+      defaultModel: "deepseek-v4-flash",
+    },
+    auth: { providers: ["opencode-go"], envKeys: ["OPENCODE_API_KEY"] },
+  };
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+test("wizard: install phase shows live status and completes", { skip: !IS_BUN }, async () => {
+  const { createTestRenderer } = await import("@opentui/core/testing");
+  const { Wizard } = await import("../src/setup/tui.js");
+
+  const setup = await createTestRenderer({ width: 90, height: 30 });
+  try {
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    const calls: string[] = [];
+    const steps = [
+      {
+        id: "pi",
+        title: "Install Pi CLI",
+        run: async () => {
+          calls.push("pi");
+          await firstGate;
+          return { ok: true, detail: "pi ok" };
+        },
+      },
+      {
+        id: "browser",
+        title: "Install agent-browser",
+        skipWhen: (v: { skipBrowser: boolean }) => v.skipBrowser,
+        run: async () => {
+          calls.push("browser");
+          return { ok: true, detail: "browser ok" };
+        },
+      },
+    ];
+
+    const wizard = new Wizard(setup.renderer, testCtx(), { steps });
+    const finished = new Promise<{
+      values: unknown;
+      install: unknown;
+    }>((resolve) => {
+      wizard.onFinish = (values, install) => resolve({ values, install });
+    });
+    const stalled = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("wizard stalled before finishing")), 8000),
+    );
+
+    wizard.start();
+    await driveToSummary(setup, { skipBrowser: true });
+    assert.match(setup.captureCharFrame(), /Installs run inside the wizard/);
+
+    setup.mockInput.pressKey("RETURN"); // Review & run → install phase
+    await flush();
+    await setup.renderOnce();
+
+    // pi running (gated), browser skipped
+    assert.match(setup.captureCharFrame(), /▶/);
+    assert.match(setup.captureCharFrame(), /Install Pi CLI/);
+    assert.match(setup.captureCharFrame(), /–/);
+
+    releaseFirst();
+    await flush();
+    await setup.renderOnce();
+
+    assert.match(setup.captureCharFrame(), /Setup complete/);
+    assert.deepEqual(calls, ["pi"]); // skipped step never ran
+
+    setup.mockInput.pressKey("RETURN"); // done screen → finish
+    const out = (await Promise.race([finished, stalled])) as {
+      values: { agentName: string };
+      install: { aborted: boolean; results: Array<{ id: string; result: { detail: string } }> };
+    };
+    assert.equal(out.values.agentName, "Disk");
+    assert.equal(out.install.aborted, false);
+    assert.equal(out.install.results.length, 1);
+    assert.equal(out.install.results[0]?.id, "pi");
+    assert.equal(out.install.results[0]?.result.detail, "pi ok");
+  } finally {
+    setup.renderer.destroy();
+  }
+});
+
+test("wizard: failed step shows stderr tail + exit code; Retry succeeds", {
+  skip: !IS_BUN,
+}, async () => {
+  const { createTestRenderer } = await import("@opentui/core/testing");
+  const { Wizard } = await import("../src/setup/tui.js");
+
+  const setup = await createTestRenderer({ width: 90, height: 30 });
+  try {
+    let piCalls = 0;
+    const steps = [
+      {
+        id: "pi",
+        title: "Install Pi CLI",
+        run: async () => {
+          piCalls += 1;
+          if (piCalls === 1) {
+            return {
+              ok: false,
+              detail: "npm install failed",
+              exitCode: 1,
+              stderrTail: "ERR! boom",
+            };
+          }
+          return { ok: true, detail: "pi ok" };
+        },
+      },
+    ];
+    const wizard = new Wizard(setup.renderer, testCtx(), { steps });
+    const finished = new Promise<{ install: unknown }>((resolve) => {
+      wizard.onFinish = (_values, install) => resolve({ install });
+    });
+    const stalled = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("wizard stalled before finishing")), 8000),
+    );
+
+    wizard.start();
+    await driveToSummary(setup);
+    setup.mockInput.pressKey("RETURN"); // → install phase
+    await flush();
+    await setup.renderOnce();
+
+    const frame = setup.captureCharFrame();
+    assert.match(frame, /✗/);
+    assert.match(frame, /exit code: 1/);
+    assert.match(frame, /ERR! boom/);
+    assert.match(frame, /Retry/);
+
+    // RETURN on the focused Retry/Abort select → retry (gotcha #12 regression)
+    setup.mockInput.pressKey("RETURN");
+    await flush();
+    await setup.renderOnce();
+    assert.match(setup.captureCharFrame(), /Setup complete/);
+
+    setup.mockInput.pressKey("RETURN"); // finish
+    const out = (await Promise.race([finished, stalled])) as {
+      install: { aborted: boolean; results: Array<{ result: { detail: string } }> };
+    };
+    assert.equal(out.install.aborted, false);
+    assert.equal(out.install.results[0]?.result.detail, "pi ok");
+  } finally {
+    setup.renderer.destroy();
+  }
+});
+
+test("wizard: Abort on failure ends install phase", { skip: !IS_BUN }, async () => {
+  const { createTestRenderer } = await import("@opentui/core/testing");
+  const { Wizard } = await import("../src/setup/tui.js");
+
+  const setup = await createTestRenderer({ width: 90, height: 30 });
+  try {
+    const calls: string[] = [];
+    const steps = [
+      {
+        id: "pi",
+        title: "Install Pi CLI",
+        run: async () => {
+          calls.push("pi");
+          return { ok: false, detail: "boom", exitCode: 7, stderrTail: "fatal" };
+        },
+      },
+      {
+        id: "auth",
+        title: "Authenticate",
+        run: async () => {
+          calls.push("auth");
+          return { ok: true, detail: "auth ok" };
+        },
+      },
+    ];
+    const wizard = new Wizard(setup.renderer, testCtx(), { steps });
+    const finished = new Promise<{ install: unknown }>((resolve) => {
+      wizard.onFinish = (_values, install) => resolve({ install });
+    });
+    const stalled = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("wizard stalled before finishing")), 8000),
+    );
+
+    wizard.start();
+    await driveToSummary(setup);
+    setup.mockInput.pressKey("RETURN"); // → install phase
+    await flush();
+    await setup.renderOnce();
+    assert.match(setup.captureCharFrame(), /exit code: 7/);
+
+    setup.mockInput.pressKey("ESCAPE"); // abort on failure panel
+    await new Promise((r) => setTimeout(r, 80)); // ESC is an incomplete sequence
+    await flush();
+    await setup.renderOnce();
+    assert.match(setup.captureCharFrame(), /Setup aborted/);
+
+    setup.mockInput.pressKey("RETURN"); // finish
+    const out = (await Promise.race([finished, stalled])) as { install: { aborted: boolean } };
+    assert.equal(out.install.aborted, true);
+    assert.deepEqual(calls, ["pi"]); // later step never ran
+  } finally {
+    setup.renderer.destroy();
+  }
+});
+
+// ── Classic flow smoke (any Node — all installers skipped) ────────────────
+
+test("runSetup: classic --yes flow completes headless with skips", async () => {
+  const { runSetup } = await import("../src/setup.js");
+  const dir = tmpDir();
+  const ws = tmpDir();
+  // Env-relative contract: a token exported in the shell would flip assertions.
+  const hadToken = Object.hasOwn(process.env, "TELEGRAM_BOT_TOKEN");
+  const savedToken = process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.TELEGRAM_BOT_TOKEN;
+  try {
+    const res = await runSetup({
+      yes: true,
+      tui: false,
+      skipPi: true,
+      skipBrowser: true,
+      skipLogin: true,
+      dataDir: dir,
+      workspaceDir: ws,
+      agentName: "Smoke",
+    });
+    assert.equal(res.cfg.agentName, "Smoke");
+    assert.equal(res.paths.home, dir);
+    // skip flags: installers not run — pi/browser reflect whatever is on PATH
+    assert.equal(res.pi.installed, Boolean(res.pi.binary));
+    assert.equal(res.browser.installed, Boolean(res.browser.cli));
+    assert.equal(res.auth.ok, false);
+    assert.equal(res.auth.detail, "skipped (--skip-login)");
+    assert.equal(res.telegram.configured, false);
+    assert.ok(res.version.length > 0);
+    // config + env persisted by applyUserConfig
+    assert.ok(existsSync(join(dir, "config.yaml")));
+    assert.ok(existsSync(join(dir, ".env")));
+  } finally {
+    if (hadToken) process.env.TELEGRAM_BOT_TOKEN = savedToken;
+    else delete process.env.TELEGRAM_BOT_TOKEN;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+// ── Install-phase extras (Bun only) ───────────────────────────────────────
+
+test("wizard: suspendForRun step suspends and resumes the renderer", {
+  skip: !IS_BUN,
+}, async () => {
+  const { createTestRenderer } = await import("@opentui/core/testing");
+  const { Wizard } = await import("../src/setup/tui.js");
+
+  const setup = await createTestRenderer({ width: 90, height: 30 });
+  try {
+    const calls: string[] = [];
+    const renderer = setup.renderer as unknown as {
+      suspend?: () => void;
+      resume?: () => void;
+    };
+    const origSuspend = renderer.suspend?.bind(renderer);
+    const origResume = renderer.resume?.bind(renderer);
+    if (origSuspend) {
+      renderer.suspend = () => {
+        calls.push("suspend");
+        try {
+          origSuspend();
+        } catch {
+          /* test renderer may not support it */
+        }
+      };
+    }
+    if (origResume) {
+      renderer.resume = () => {
+        calls.push("resume");
+        try {
+          origResume();
+        } catch {
+          /* test renderer may not support it */
+        }
+      };
+    }
+    const steps = [
+      {
+        id: "auth",
+        title: "Authenticate",
+        suspendForRun: true,
+        run: async () => {
+          calls.push("run");
+          return { ok: true, detail: "auth ok" };
+        },
+      },
+    ];
+    const wizard = new Wizard(setup.renderer, testCtx(), { steps });
+    const finished = new Promise<void>((resolve) => {
+      wizard.onFinish = () => resolve();
+    });
+    const stalled = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("wizard stalled before finishing")), 8000),
+    );
+
+    wizard.start();
+    await driveToSummary(setup);
+    setup.mockInput.pressKey("RETURN"); // → install phase
+    await flush();
+    await setup.renderOnce();
+    assert.match(setup.captureCharFrame(), /Setup complete/);
+    setup.mockInput.pressKey("RETURN"); // finish
+    await Promise.race([finished, stalled]);
+
+    if (origSuspend && origResume) {
+      assert.deepEqual(calls, ["suspend", "run", "resume"]);
+    } else {
+      assert.deepEqual(calls, ["run"]);
+    }
+  } finally {
+    setup.renderer.destroy();
+  }
+});
+
+test("wizard: spinner animates through frame callbacks", { skip: !IS_BUN }, async () => {
+  const { createTestRenderer } = await import("@opentui/core/testing");
+  const { Wizard } = await import("../src/setup/tui.js");
+
+  const setup = await createTestRenderer({ width: 90, height: 30 });
+  try {
+    // Capture the frame callback the wizard registers.
+    let captured: ((dt: number) => Promise<void>) | null = null;
+    const renderer = setup.renderer as unknown as {
+      setFrameCallback: (cb: (dt: number) => Promise<void>) => void;
+    };
+    const origSet = renderer.setFrameCallback.bind(renderer);
+    renderer.setFrameCallback = (cb) => {
+      captured = cb;
+      origSet(cb);
+    };
+
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const steps = [
+      {
+        id: "pi",
+        title: "Install Pi CLI",
+        run: async () => {
+          await gate;
+          return { ok: true, detail: "pi ok" };
+        },
+      },
+    ];
+    const wizard = new Wizard(setup.renderer, testCtx(), { steps });
+    const finished = new Promise<void>((resolve) => {
+      wizard.onFinish = () => resolve();
+    });
+    const stalled = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("wizard stalled before finishing")), 8000),
+    );
+
+    wizard.start();
+    await driveToSummary(setup);
+    setup.mockInput.pressKey("RETURN"); // → install phase (step gated → running)
+    await flush();
+    await setup.renderOnce();
+
+    assert.ok(captured, "frame callback must be registered while a step runs");
+    assert.match(setup.captureCharFrame(), /◐/); // initial spinner frame
+
+    // 6 frames → one re-render → next spinner glyph
+    for (let i = 0; i < 6; i += 1) {
+      await captured!();
+    }
+    await setup.renderOnce();
+    assert.match(setup.captureCharFrame(), /◓/);
+
+    release();
+    await flush();
+    await setup.renderOnce();
+    setup.mockInput.pressKey("RETURN"); // finish
+    await Promise.race([finished, stalled]);
+  } finally {
+    setup.renderer.destroy();
+  }
+});
+
+test("wizard: destroy mid-install aborts the pump, no dangling state", {
+  skip: !IS_BUN,
+}, async () => {
+  const { createTestRenderer } = await import("@opentui/core/testing");
+  const { Wizard } = await import("../src/setup/tui.js");
+
+  const setup = await createTestRenderer({ width: 90, height: 30 });
+  try {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const steps = [
+      {
+        id: "pi",
+        title: "Install Pi CLI",
+        run: async () => {
+          await gate;
+          return { ok: false, detail: "boom", exitCode: 1, stderrTail: "fatal" };
+        },
+      },
+      {
+        id: "auth",
+        title: "Authenticate",
+        run: async () => ({ ok: true, detail: "auth ok" }),
+      },
+    ];
+    const wizard = new Wizard(setup.renderer, testCtx(), { steps });
+
+    wizard.start();
+    await driveToSummary(setup);
+    setup.mockInput.pressKey("RETURN"); // → install phase (step gated → running)
+    await flush();
+    await setup.renderOnce();
+    assert.match(setup.captureCharFrame(), /▶/);
+
+    // Destroy (Ctrl+C) while the step is running, then let the step fail.
+    setup.renderer.destroy();
+    release();
+    await flush();
+    await setup.renderOnce();
+
+    const state = (wizard as unknown as { installRun: { aborted: boolean } }).installRun;
+    assert.equal(state.aborted, true); // pump stopped on the destroyed guard
+  } finally {
+    try {
+      setup.renderer.destroy();
+    } catch {
+      /* already destroyed */
+    }
   }
 });
