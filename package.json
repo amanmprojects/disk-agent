@@ -32,7 +32,7 @@
     "check": "biome check src/ test/",
     "gateway": "tsx src/cli.ts gateway",
     "setup": "tsx src/cli.ts setup",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "tsx --test test/*.test.ts",
     "prepublishOnly": "npm run clean && npm run build && npm test",
     "pack:check": "npm run prepublishOnly && npm pack --dry-run"
   },
