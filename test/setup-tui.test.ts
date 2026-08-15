@@ -766,7 +766,9 @@ test("wizard: spinner animates through frame callbacks", { skip: !IS_BUN }, asyn
   }
 });
 
-test("wizard: destroy mid-install aborts the pump, no dangling state", { skip: !IS_BUN }, async () => {
+test("wizard: destroy mid-install aborts the pump, no dangling state", {
+  skip: !IS_BUN,
+}, async () => {
   const { createTestRenderer } = await import("@opentui/core/testing");
   const { Wizard } = await import("../src/setup/tui.js");
 
